@@ -1,12 +1,14 @@
+// macro_recplay.cpp
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <mmsystem.h> // timeGetDevCaps / timeBeginPeriod / timeEndPeriod (link winmm.lib)
 #include <cstdio>
 #include <cstdint>
 #include <vector>
 #include <string>
 #include <thread>
 #include <chrono>
-#include <mmsystem.h>
+#include <iostream>
 
 static const char *kClassName = "RawIO_Sink_Window";
 
@@ -23,15 +25,15 @@ struct FileHeader
 {
     uint32_t magic;     // 'RMAC' = 0x524D4143
     uint32_t version;   // 1
-    uint64_t start_utc; // optional, not used in replay
+    uint64_t start_utc; // FILETIME; informational
 };
 struct Event
 {
     uint32_t type; // EventType
     uint64_t t_us; // microseconds since start
-    int32_t a;     // meaning depends on type
-    int32_t b;     // "
-    int32_t c;     // "
+    int32_t a;     // payload
+    int32_t b;     // payload
+    int32_t c;     // payload
 };
 #pragma pack(pop)
 
@@ -48,6 +50,16 @@ static uint64_t now_us_since_start()
     QueryPerformanceCounter(&t);
     const long double dt = (long double)(t.QuadPart - gT0.QuadPart) / (long double)gFreq.QuadPart;
     return (uint64_t)(dt * 1000000.0L);
+}
+
+static void countdown_5s(const char *msg)
+{
+    std::cout << msg << " in 5 seconds...\n";
+    for (int i = 5; i > 0; --i)
+    {
+        std::cout << i << "...\n";
+        Sleep(1000);
+    }
 }
 
 static void write_event(uint32_t type, int32_t a = 0, int32_t b = 0, int32_t c = 0)
@@ -87,7 +99,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             const RAWMOUSE &m = raw->data.mouse;
 
-            // Mouse movement (raw deltas)
+            // Raw relative movement
             if ((m.usFlags & MOUSE_MOVE_ABSOLUTE) == 0)
             {
                 LONG dx = m.lLastX;
@@ -107,12 +119,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         else if (raw->header.dwType == RIM_TYPEKEYBOARD)
         {
             const RAWKEYBOARD &kb = raw->data.keyboard;
-            // Use virtual-key code; RI_KEY_MAKE (down) / RI_KEY_BREAK (up)
             bool isBreak = (kb.Flags & RI_KEY_BREAK) != 0;
             UINT vk = kb.VKey;
-            // Filter out fake VKs (some extended codes map to 255)
             if (vk == 255)
-                break;
+                break; // filter bogus VK
 
             if (isBreak)
             {
@@ -123,7 +133,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 write_event(EV_KEY_DOWN, (int32_t)vk, 0, 0);
             }
 
-            // ESC to stop recording quickly
+            // ESC ends recording session quickly (and is still logged)
             if (!isBreak && vk == VK_ESCAPE)
             {
                 PostMessage(hwnd, WM_CLOSE, 0, 0);
@@ -241,6 +251,10 @@ static bool record_to_file(const char *path)
 
     QueryPerformanceFrequency(&gFreq);
     QueryPerformanceCounter(&gT0);
+
+    // 5s countdown before starting
+    countdown_5s("Recording will begin");
+
     gRecording = true;
 
     std::puts("Recording... (ESC to stop)");
@@ -277,17 +291,7 @@ static bool play_file(const char *path)
         return false;
     }
 
-    std::puts("Playing...");
-    gPlaying = true;
-
-    // Improve timer granularity a bit
-    TIMECAPS tc;
-    if (timeGetDevCaps(&tc, sizeof(tc)) == TIMERR_NOERROR)
-    {
-        timeBeginPeriod(tc.wPeriodMin);
-    }
-
-    // Read all events into memory (simple approach)
+    // Read all events
     std::vector<Event> events;
     Event ev{};
     while (read_exact(in, &ev, sizeof(ev)) == sizeof(ev))
@@ -296,7 +300,18 @@ static bool play_file(const char *path)
     }
     std::fclose(in);
 
-    // Playback with original timing
+    // 5s countdown before playback
+    countdown_5s("Playback will begin");
+    std::puts("Playing...");
+
+    gPlaying = true;
+
+    // Improve timer granularity (optional)
+    TIMECAPS tc;
+    bool setPeriod = (timeGetDevCaps(&tc, sizeof(tc)) == TIMERR_NOERROR);
+    if (setPeriod)
+        timeBeginPeriod(tc.wPeriodMin);
+
     uint64_t prev_t = 0;
     for (size_t i = 0; i < events.size(); ++i)
     {
@@ -327,10 +342,8 @@ static bool play_file(const char *path)
         }
     }
 
-    if (timeGetDevCaps(&tc, sizeof(tc)) == TIMERR_NOERROR)
-    {
+    if (setPeriod)
         timeEndPeriod(tc.wPeriodMin);
-    }
 
     gPlaying = false;
     std::puts("Done.");
@@ -349,6 +362,7 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    // NOTE: requires C++11 for <thread>/<chrono> anyway
     if (std::string(argv[1]) == "record")
     {
         return record_to_file(argv[2]) ? 0 : 1;
