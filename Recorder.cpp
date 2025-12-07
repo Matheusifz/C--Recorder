@@ -18,6 +18,7 @@ enum EventType : uint32_t
     EV_MOUSE_WHEEL = 1,
     EV_KEY_DOWN = 2,
     EV_KEY_UP = 3,
+    EV_MOUSE_BUTTON = 4, // NEW: mouse button down/up
 };
 
 #pragma pack(push, 1)
@@ -109,13 +110,43 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     write_event(EV_MOUSE_MOVE, (int32_t)dx, (int32_t)dy, 0);
                 }
             }
+
             // Wheel
             if (m.usButtonFlags & RI_MOUSE_WHEEL)
             {
                 SHORT wheelDelta = *reinterpret_cast<const SHORT *>(&m.usButtonData);
                 write_event(EV_MOUSE_WHEEL, (int32_t)wheelDelta, 0, 0);
             }
+
+            // NEW: mouse button presses / releases
+            auto log_button = [](int button, bool down)
+            {
+                // a = button id, b = 1 for down, 0 for up
+                write_event(EV_MOUSE_BUTTON, (int32_t)button, down ? 1 : 0, 0);
+            };
+
+            if (m.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN)
+                log_button(1, true);
+            if (m.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP)
+                log_button(1, false);
+            if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN)
+                log_button(2, true);
+            if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_UP)
+                log_button(2, false);
+            if (m.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN)
+                log_button(3, true);
+            if (m.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_UP)
+                log_button(3, false);
+            if (m.usButtonFlags & RI_MOUSE_BUTTON_4_DOWN)
+                log_button(4, true);
+            if (m.usButtonFlags & RI_MOUSE_BUTTON_4_UP)
+                log_button(4, false);
+            if (m.usButtonFlags & RI_MOUSE_BUTTON_5_DOWN)
+                log_button(5, true);
+            if (m.usButtonFlags & RI_MOUSE_BUTTON_5_UP)
+                log_button(5, false);
         }
+
         else if (raw->header.dwType == RIM_TYPEKEYBOARD)
         {
             const RAWKEYBOARD &kb = raw->data.keyboard;
@@ -229,6 +260,37 @@ static void send_key(bool down, UINT vk)
     SendInput(1, &in, sizeof(INPUT));
 }
 
+static void send_mouse_button(int button, bool down)
+{
+    INPUT in{};
+    in.type = INPUT_MOUSE;
+
+    switch (button)
+    {
+    case 1: // left
+        in.mi.dwFlags = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+        break;
+    case 2: // right
+        in.mi.dwFlags = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
+        break;
+    case 3: // middle
+        in.mi.dwFlags = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
+        break;
+    case 4: // X1
+        in.mi.dwFlags = down ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
+        in.mi.mouseData = XBUTTON1;
+        break;
+    case 5: // X2
+        in.mi.dwFlags = down ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
+        in.mi.mouseData = XBUTTON2;
+        break;
+    default:
+        return; // unknown button, ignore
+    }
+
+    SendInput(1, &in, sizeof(INPUT));
+}
+
 static bool record_to_file(const char *path)
 {
     gOut = std::fopen(path, "wb");
@@ -330,6 +392,10 @@ static bool play_file(const char *path)
             break;
         case EV_MOUSE_WHEEL:
             send_mouse_wheel(e.a);
+            break;
+        case EV_MOUSE_BUTTON:
+            // a = button id, b = 1 (down) / 0 (up)
+            send_mouse_button(e.a, e.b != 0);
             break;
         case EV_KEY_DOWN:
             send_key(true, (UINT)e.a);
