@@ -14,11 +14,12 @@ static const char *kClassName = "RawIO_Sink_Window";
 
 enum EventType : uint32_t
 {
-    EV_MOUSE_MOVE = 0,
+    EV_MOUSE_MOVE = 0, // relative dx, dy
     EV_MOUSE_WHEEL = 1,
     EV_KEY_DOWN = 2,
     EV_KEY_UP = 3,
-    EV_MOUSE_BUTTON = 4, // NEW: mouse button down/up
+    EV_MOUSE_BUTTON = 4, // mouse button press/release
+    EV_MOUSE_POS = 5,    // absolute x, y when Alt is held
 };
 
 #pragma pack(push, 1)
@@ -105,9 +106,27 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             {
                 LONG dx = m.lLastX;
                 LONG dy = m.lLastY;
+
                 if (dx != 0 || dy != 0)
                 {
-                    write_event(EV_MOUSE_MOVE, (int32_t)dx, (int32_t)dy, 0);
+                    // Alt held? If yes, record absolute position instead of delta
+                    bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+                    // If you want specifically right Alt, use VK_RMENU instead.
+
+                    if (!altDown)
+                    {
+                        // Record relative vector
+                        write_event(EV_MOUSE_MOVE, (int32_t)dx, (int32_t)dy, 0);
+                    }
+                    else
+                    {
+                        // Record absolute screen position
+                        POINT pt{};
+                        if (GetCursorPos(&pt))
+                        {
+                            write_event(EV_MOUSE_POS, (int32_t)pt.x, (int32_t)pt.y, 0);
+                        }
+                    }
                 }
             }
 
@@ -118,7 +137,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 write_event(EV_MOUSE_WHEEL, (int32_t)wheelDelta, 0, 0);
             }
 
-            // NEW: mouse button presses / releases
+            // Mouse buttons
             auto log_button = [](int button, bool down)
             {
                 // a = button id, b = 1 for down, 0 for up
@@ -146,7 +165,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (m.usButtonFlags & RI_MOUSE_BUTTON_5_UP)
                 log_button(5, false);
         }
-
         else if (raw->header.dwType == RIM_TYPEKEYBOARD)
         {
             const RAWKEYBOARD &kb = raw->data.keyboard;
@@ -232,7 +250,8 @@ static uint64_t read_exact(FILE *f, void *buf, uint64_t sz)
     return (uint64_t)fread(buf, 1, (size_t)sz, f);
 }
 
-static void send_mouse_move(int dx, int dy)
+// Relative move
+static void send_mouse_move_rel(int dx, int dy)
 {
     INPUT in{};
     in.type = INPUT_MOUSE;
@@ -242,21 +261,45 @@ static void send_mouse_move(int dx, int dy)
     SendInput(1, &in, sizeof(INPUT));
 }
 
+// Absolute move (screen coords)
+static void send_mouse_move_abs(int x, int y)
+{
+    // Virtual desktop bounds (handles multi-monitor setups)
+    int vsx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    int vsy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    int vsw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    int vsh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+    if (vsw <= 0 || vsh <= 0)
+        return;
+
+    double relx = (double)(x - vsx) / (double)vsw;
+    double rely = (double)(y - vsy) / (double)vsh;
+
+    if (relx < 0.0)
+        relx = 0.0;
+    if (relx > 1.0)
+        relx = 1.0;
+    if (rely < 0.0)
+        rely = 0.0;
+    if (rely > 1.0)
+        rely = 1.0;
+
+    INPUT in{};
+    in.type = INPUT_MOUSE;
+    in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    in.mi.dx = (LONG)(relx * 65535.0 + 0.5);
+    in.mi.dy = (LONG)(rely * 65535.0 + 0.5);
+
+    SendInput(1, &in, sizeof(INPUT));
+}
+
 static void send_mouse_wheel(int delta)
 {
     INPUT in{};
     in.type = INPUT_MOUSE;
     in.mi.mouseData = (DWORD)delta;
     in.mi.dwFlags = MOUSEEVENTF_WHEEL;
-    SendInput(1, &in, sizeof(INPUT));
-}
-
-static void send_key(bool down, UINT vk)
-{
-    INPUT in{};
-    in.type = INPUT_KEYBOARD;
-    in.ki.wVk = (WORD)vk;
-    in.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
     SendInput(1, &in, sizeof(INPUT));
 }
 
@@ -285,9 +328,18 @@ static void send_mouse_button(int button, bool down)
         in.mi.mouseData = XBUTTON2;
         break;
     default:
-        return; // unknown button, ignore
+        return; // unknown button
     }
 
+    SendInput(1, &in, sizeof(INPUT));
+}
+
+static void send_key(bool down, UINT vk)
+{
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = (WORD)vk;
+    in.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
     SendInput(1, &in, sizeof(INPUT));
 }
 
@@ -388,13 +440,17 @@ static bool play_file(const char *path)
         switch (e.type)
         {
         case EV_MOUSE_MOVE:
-            send_mouse_move(e.a, e.b);
+            // relative movement (recorded when Alt was NOT held)
+            send_mouse_move_rel(e.a, e.b);
+            break;
+        case EV_MOUSE_POS:
+            // absolute position (recorded when Alt WAS held)
+            send_mouse_move_abs(e.a, e.b);
             break;
         case EV_MOUSE_WHEEL:
             send_mouse_wheel(e.a);
             break;
         case EV_MOUSE_BUTTON:
-            // a = button id, b = 1 (down) / 0 (up)
             send_mouse_button(e.a, e.b != 0);
             break;
         case EV_KEY_DOWN:
@@ -428,7 +484,6 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    // NOTE: requires C++11 for <thread>/<chrono> anyway
     if (std::string(argv[1]) == "record")
     {
         return record_to_file(argv[2]) ? 0 : 1;
