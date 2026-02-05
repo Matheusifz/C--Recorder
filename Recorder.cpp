@@ -1,4 +1,11 @@
 // macro_recplay.cpp
+// Build (MSVC):
+//   cl /EHsc /O2 macro_recplay.cpp user32.lib winmm.lib
+//
+// Notes:
+// - Overlay works over normal windows and borderless fullscreen.
+// - Overlay may NOT appear over "exclusive fullscreen" apps/games (by design of how exclusive fullscreen works).
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <mmsystem.h> // timeGetDevCaps / timeBeginPeriod / timeEndPeriod (link winmm.lib)
@@ -10,7 +17,8 @@
 #include <chrono>
 #include <iostream>
 
-static const char *kClassName = "RawIO_Sink_Window";
+static const char *kSinkClassName = "RawIO_Sink_Window";
+static const char *kOverlayClassName = "RawIO_Overlay_Window";
 
 enum EventType : uint32_t
 {
@@ -39,12 +47,26 @@ struct Event
 };
 #pragma pack(pop)
 
+// --------------------------- Globals ---------------------------
+
 static LARGE_INTEGER gFreq{};
 static LARGE_INTEGER gT0{};
+
 static FILE *gOut = nullptr;
 static bool gRecording = false;
 static bool gPlaying = false;
-static HWND gHwnd = nullptr;
+
+static HWND gSinkHwnd = nullptr;    // hidden raw input sink window
+static HWND gOverlayHwnd = nullptr; // small always-on-top overlay window
+
+// Overlay state
+static LONG gLastDx = 0, gLastDy = 0;
+static int gLastWheel = 0;
+static bool gMouseBtn[6] = {};  // 1..5 used
+static bool gKeyDown[256] = {}; // VK state
+static POINT gCursorPt{};
+
+// --------------------------- Timing / IO ---------------------------
 
 static uint64_t now_us_since_start()
 {
@@ -78,7 +100,182 @@ static void write_event(uint32_t type, int32_t a = 0, int32_t b = 0, int32_t c =
     fflush(gOut);
 }
 
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+static uint64_t read_exact(FILE *f, void *buf, uint64_t sz)
+{
+    return (uint64_t)fread(buf, 1, (size_t)sz, f);
+}
+
+// --------------------------- Overlay Window ---------------------------
+
+static void overlay_invalidate()
+{
+    if (gOverlayHwnd)
+        InvalidateRect(gOverlayHwnd, nullptr, FALSE);
+}
+
+static void overlay_show(bool on)
+{
+    if (!gOverlayHwnd)
+        return;
+    ShowWindow(gOverlayHwnd, on ? SW_SHOWNOACTIVATE : SW_HIDE);
+    if (on)
+        overlay_invalidate();
+}
+
+static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE; // never steal focus
+
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps{};
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+
+        // Background fill (with layered alpha)
+        HBRUSH bg = CreateSolidBrush(RGB(10, 10, 10));
+        FillRect(hdc, &rc, bg);
+        DeleteObject(bg);
+
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(230, 230, 230));
+
+        // A simple fixed font can look nicer than the default.
+        HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        HFONT old = (HFONT)SelectObject(hdc, font);
+
+        char line[512];
+        int y = 8;
+
+        auto put = [&](const char *s)
+        {
+            TextOutA(hdc, 8, y, s, (int)strlen(s));
+            y += 18;
+        };
+
+        put("RawIO Overlay (Recording)");
+
+        std::snprintf(line, sizeof(line), "Cursor: %ld, %ld", (long)gCursorPt.x, (long)gCursorPt.y);
+        put(line);
+
+        std::snprintf(line, sizeof(line), "Mouse dx/dy: %ld / %ld", gLastDx, gLastDy);
+        put(line);
+
+        std::snprintf(line, sizeof(line), "Wheel: %d", gLastWheel);
+        put(line);
+
+        std::snprintf(line, sizeof(line), "Buttons: L=%d R=%d M=%d X1=%d X2=%d",
+                      gMouseBtn[1], gMouseBtn[2], gMouseBtn[3], gMouseBtn[4], gMouseBtn[5]);
+        put(line);
+
+        std::snprintf(line, sizeof(line),
+                      "Keys: W=%d A=%d S=%d D=%d  Shift=%d Ctrl=%d Alt=%d Space=%d",
+                      gKeyDown['W'], gKeyDown['A'], gKeyDown['S'], gKeyDown['D'],
+                      gKeyDown[VK_SHIFT], gKeyDown[VK_CONTROL], gKeyDown[VK_MENU], gKeyDown[VK_SPACE]);
+        put(line);
+
+        SelectObject(hdc, old);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_DESTROY:
+        return 0;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+static bool create_overlay_window()
+{
+    WNDCLASSA wc{};
+    wc.lpfnWndProc = OverlayProc;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = kOverlayClassName;
+
+    if (!RegisterClassA(&wc))
+    {
+        DWORD e = GetLastError();
+        if (e != ERROR_CLASS_ALREADY_EXISTS)
+        {
+            std::fprintf(stderr, "RegisterClassA overlay failed (%lu)\n", e);
+            return false;
+        }
+    }
+
+    const int w = 300, h = 200;
+    const int x = 10, y = 10;
+
+    DWORD ex = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+    DWORD style = WS_POPUP;
+
+    gOverlayHwnd = CreateWindowExA(
+        ex, kOverlayClassName, "RawIO Overlay",
+        style,
+        x, y, w, h,
+        nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+
+    if (!gOverlayHwnd)
+    {
+        std::fprintf(stderr, "CreateWindowExA overlay failed (%lu)\n", GetLastError());
+        return false;
+    }
+
+    // Global opacity (0..255). Whole window becomes translucent.
+    SetLayeredWindowAttributes(gOverlayHwnd, 0, 210, LWA_ALPHA);
+
+    ShowWindow(gOverlayHwnd, SW_HIDE);
+    return true;
+}
+
+static void destroy_overlay_window()
+{
+    if (gOverlayHwnd)
+    {
+        DestroyWindow(gOverlayHwnd);
+        gOverlayHwnd = nullptr;
+    }
+}
+
+// --------------------------- Raw Input Sink Window ---------------------------
+
+static bool register_raw(HWND hwnd)
+{
+    RAWINPUTDEVICE rids[2]{};
+
+    // Mouse
+    rids[0].usUsagePage = 0x01; // Generic Desktop
+    rids[0].usUsage = 0x02;     // Mouse
+    rids[0].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
+    rids[0].hwndTarget = hwnd;
+
+    // Keyboard
+    rids[1].usUsagePage = 0x01; // Generic Desktop
+    rids[1].usUsage = 0x06;     // Keyboard
+    rids[1].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
+    rids[1].hwndTarget = hwnd;
+
+    return RegisterRawInputDevices(rids, 2, sizeof(RAWINPUTDEVICE)) == TRUE;
+}
+
+static void update_overlay_state_on_mouse()
+{
+    GetCursorPos(&gCursorPt);
+    overlay_invalidate();
+}
+
+static void update_overlay_state_on_key(UINT vk, bool down)
+{
+    if (vk < 256)
+        gKeyDown[vk] = down;
+    overlay_invalidate();
+}
+
+static LRESULT CALLBACK SinkProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
@@ -97,6 +294,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             break;
 
         RAWINPUT *raw = reinterpret_cast<RAWINPUT *>(buf.data());
+
         if (raw->header.dwType == RIM_TYPEMOUSE)
         {
             const RAWMOUSE &m = raw->data.mouse;
@@ -109,24 +307,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
                 if (dx != 0 || dy != 0)
                 {
+                    gLastDx = dx;
+                    gLastDy = dy;
+
                     // Alt held? If yes, record absolute position instead of delta
                     bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
-                    // If you want specifically right Alt, use VK_RMENU instead.
 
                     if (!altDown)
                     {
-                        // Record relative vector
                         write_event(EV_MOUSE_MOVE, (int32_t)dx, (int32_t)dy, 0);
                     }
                     else
                     {
-                        // Record absolute screen position
                         POINT pt{};
                         if (GetCursorPos(&pt))
-                        {
                             write_event(EV_MOUSE_POS, (int32_t)pt.x, (int32_t)pt.y, 0);
-                        }
                     }
+
+                    update_overlay_state_on_mouse();
                 }
             }
 
@@ -134,14 +332,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (m.usButtonFlags & RI_MOUSE_WHEEL)
             {
                 SHORT wheelDelta = *reinterpret_cast<const SHORT *>(&m.usButtonData);
+                gLastWheel = (int)wheelDelta;
                 write_event(EV_MOUSE_WHEEL, (int32_t)wheelDelta, 0, 0);
+                update_overlay_state_on_mouse();
             }
 
             // Mouse buttons
-            auto log_button = [](int button, bool down)
+            auto log_button = [&](int button, bool down)
             {
-                // a = button id, b = 1 for down, 0 for up
+                if (button >= 1 && button <= 5)
+                    gMouseBtn[button] = down;
                 write_event(EV_MOUSE_BUTTON, (int32_t)button, down ? 1 : 0, 0);
+                update_overlay_state_on_mouse();
             };
 
             if (m.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN)
@@ -168,6 +370,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         else if (raw->header.dwType == RIM_TYPEKEYBOARD)
         {
             const RAWKEYBOARD &kb = raw->data.keyboard;
+
             bool isBreak = (kb.Flags & RI_KEY_BREAK) != 0;
             UINT vk = kb.VKey;
             if (vk == 255)
@@ -176,10 +379,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (isBreak)
             {
                 write_event(EV_KEY_UP, (int32_t)vk, 0, 0);
+                update_overlay_state_on_key(vk, false);
             }
             else
             {
                 write_event(EV_KEY_DOWN, (int32_t)vk, 0, 0);
+                update_overlay_state_on_key(vk, true);
             }
 
             // ESC ends recording session quickly (and is still logged)
@@ -188,67 +393,73 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 PostMessage(hwnd, WM_CLOSE, 0, 0);
             }
         }
+
         break;
     }
+
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
-    default:
-        break;
     }
+
     return DefWindowProc(hwnd, msg, wParam, lParam);
-}
-
-static bool register_raw(HWND hwnd)
-{
-    RAWINPUTDEVICE rids[2]{};
-    // Mouse
-    rids[0].usUsagePage = 0x01; // Generic Desktop
-    rids[0].usUsage = 0x02;     // Mouse
-    rids[0].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
-    rids[0].hwndTarget = hwnd;
-    // Keyboard
-    rids[1].usUsagePage = 0x01; // Generic Desktop
-    rids[1].usUsage = 0x06;     // Keyboard
-    rids[1].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
-    rids[1].hwndTarget = hwnd;
-
-    return RegisterRawInputDevices(rids, 2, sizeof(RAWINPUTDEVICE)) == TRUE;
 }
 
 static bool create_sink_window()
 {
     WNDCLASSA wc{};
-    wc.lpfnWndProc = WndProc;
+    wc.lpfnWndProc = SinkProc;
     wc.hInstance = GetModuleHandle(nullptr);
-    wc.lpszClassName = kClassName;
+    wc.lpszClassName = kSinkClassName;
+
     if (!RegisterClassA(&wc))
     {
-        std::fprintf(stderr, "RegisterClassA failed (%lu)\n", GetLastError());
-        return false;
+        DWORD e = GetLastError();
+        if (e != ERROR_CLASS_ALREADY_EXISTS)
+        {
+            std::fprintf(stderr, "RegisterClassA sink failed (%lu)\n", e);
+            return false;
+        }
     }
-    gHwnd = CreateWindowExA(0, kClassName, "RawIO_Sink",
-                            WS_OVERLAPPEDWINDOW,
-                            CW_USEDEFAULT, CW_USEDEFAULT, 100, 100,
-                            nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
-    if (!gHwnd)
+
+    gSinkHwnd = CreateWindowExA(
+        0, kSinkClassName, "RawIO_Sink",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 100, 100,
+        nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+
+    if (!gSinkHwnd)
     {
-        std::fprintf(stderr, "CreateWindowExA failed (%lu)\n", GetLastError());
+        std::fprintf(stderr, "CreateWindowExA sink failed (%lu)\n", GetLastError());
         return false;
     }
-    ShowWindow(gHwnd, SW_HIDE);
-    if (!register_raw(gHwnd))
+
+    // Hidden; just exists to receive WM_INPUT with INPUTSINK
+    ShowWindow(gSinkHwnd, SW_HIDE);
+
+    if (!register_raw(gSinkHwnd))
     {
         std::fprintf(stderr, "RegisterRawInputDevices failed (%lu)\n", GetLastError());
         return false;
     }
+
     return true;
 }
 
-static uint64_t read_exact(FILE *f, void *buf, uint64_t sz)
+static void destroy_sink_window()
 {
-    return (uint64_t)fread(buf, 1, (size_t)sz, f);
+    if (gSinkHwnd)
+    {
+        DestroyWindow(gSinkHwnd);
+        gSinkHwnd = nullptr;
+    }
 }
+
+// --------------------------- Playback SendInput helpers ---------------------------
 
 // Relative move
 static void send_mouse_move_rel(int dx, int dy)
@@ -257,19 +468,17 @@ static void send_mouse_move_rel(int dx, int dy)
     in.type = INPUT_MOUSE;
     in.mi.dx = dx;
     in.mi.dy = dy;
-    in.mi.dwFlags = MOUSEEVENTF_MOVE; // relative move
+    in.mi.dwFlags = MOUSEEVENTF_MOVE;
     SendInput(1, &in, sizeof(INPUT));
 }
 
 // Absolute move (screen coords)
 static void send_mouse_move_abs(int x, int y)
 {
-    // Virtual desktop bounds (handles multi-monitor setups)
     int vsx = GetSystemMetrics(SM_XVIRTUALSCREEN);
     int vsy = GetSystemMetrics(SM_YVIRTUALSCREEN);
     int vsw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     int vsh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-
     if (vsw <= 0 || vsh <= 0)
         return;
 
@@ -290,7 +499,6 @@ static void send_mouse_move_abs(int x, int y)
     in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
     in.mi.dx = (LONG)(relx * 65535.0 + 0.5);
     in.mi.dy = (LONG)(rely * 65535.0 + 0.5);
-
     SendInput(1, &in, sizeof(INPUT));
 }
 
@@ -310,25 +518,25 @@ static void send_mouse_button(int button, bool down)
 
     switch (button)
     {
-    case 1: // left
+    case 1:
         in.mi.dwFlags = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
         break;
-    case 2: // right
+    case 2:
         in.mi.dwFlags = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
         break;
-    case 3: // middle
+    case 3:
         in.mi.dwFlags = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
         break;
-    case 4: // X1
+    case 4:
         in.mi.dwFlags = down ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
         in.mi.mouseData = XBUTTON1;
         break;
-    case 5: // X2
+    case 5:
         in.mi.dwFlags = down ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
         in.mi.mouseData = XBUTTON2;
         break;
     default:
-        return; // unknown button
+        return;
     }
 
     SendInput(1, &in, sizeof(INPUT));
@@ -343,14 +551,24 @@ static void send_key(bool down, UINT vk)
     SendInput(1, &in, sizeof(INPUT));
 }
 
+// --------------------------- Record / Play ---------------------------
+
 static bool record_to_file(const char *path)
 {
+    // Reset overlay state
+    ZeroMemory(gMouseBtn, sizeof(gMouseBtn));
+    ZeroMemory(gKeyDown, sizeof(gKeyDown));
+    gLastDx = gLastDy = 0;
+    gLastWheel = 0;
+    gCursorPt = POINT{0, 0};
+
     gOut = std::fopen(path, "wb");
     if (!gOut)
     {
         std::fprintf(stderr, "Cannot open output file: %s\n", path);
         return false;
     }
+
     FileHeader hdr{};
     hdr.magic = 0x524D4143; // 'RMAC'
     hdr.version = 1;
@@ -363,15 +581,19 @@ static bool record_to_file(const char *path)
     if (!create_sink_window())
         return false;
 
+    if (!create_overlay_window())
+        return false;
+
     QueryPerformanceFrequency(&gFreq);
     QueryPerformanceCounter(&gT0);
 
-    // 5s countdown before starting
     countdown_5s("Recording will begin");
 
     gRecording = true;
+    overlay_show(true);
 
     std::puts("Recording... (ESC to stop)");
+
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
     {
@@ -380,11 +602,17 @@ static bool record_to_file(const char *path)
     }
 
     gRecording = false;
+    overlay_show(false);
+
     if (gOut)
     {
         std::fclose(gOut);
         gOut = nullptr;
     }
+
+    destroy_overlay_window();
+    destroy_sink_window();
+
     std::puts("Recording stopped.");
     return true;
 }
@@ -397,6 +625,7 @@ static bool play_file(const char *path)
         std::fprintf(stderr, "Cannot open input file: %s\n", path);
         return false;
     }
+
     FileHeader hdr{};
     if (read_exact(in, &hdr, sizeof(hdr)) != sizeof(hdr) || hdr.magic != 0x524D4143)
     {
@@ -405,23 +634,20 @@ static bool play_file(const char *path)
         return false;
     }
 
-    // Read all events
     std::vector<Event> events;
     Event ev{};
     while (read_exact(in, &ev, sizeof(ev)) == sizeof(ev))
-    {
         events.push_back(ev);
-    }
+
     std::fclose(in);
 
-    // 5s countdown before playback
     countdown_5s("Playback will begin");
     std::puts("Playing...");
 
     gPlaying = true;
 
     // Improve timer granularity (optional)
-    TIMECAPS tc;
+    TIMECAPS tc{};
     bool setPeriod = (timeGetDevCaps(&tc, sizeof(tc)) == TIMERR_NOERROR);
     if (setPeriod)
         timeBeginPeriod(tc.wPeriodMin);
@@ -430,9 +656,10 @@ static bool play_file(const char *path)
     for (size_t i = 0; i < events.size(); ++i)
     {
         const Event &e = events[i];
+
         if (e.t_us > prev_t)
         {
-            const uint64_t dt = e.t_us - prev_t;
+            uint64_t dt = e.t_us - prev_t;
             std::this_thread::sleep_for(std::chrono::microseconds(dt));
         }
         prev_t = e.t_us;
@@ -440,11 +667,9 @@ static bool play_file(const char *path)
         switch (e.type)
         {
         case EV_MOUSE_MOVE:
-            // relative movement (recorded when Alt was NOT held)
             send_mouse_move_rel(e.a, e.b);
             break;
         case EV_MOUSE_POS:
-            // absolute position (recorded when Alt WAS held)
             send_mouse_move_abs(e.a, e.b);
             break;
         case EV_MOUSE_WHEEL:
@@ -472,6 +697,8 @@ static bool play_file(const char *path)
     return true;
 }
 
+// --------------------------- main ---------------------------
+
 int main(int argc, char **argv)
 {
     if (argc < 3)
@@ -485,16 +712,11 @@ int main(int argc, char **argv)
     }
 
     if (std::string(argv[1]) == "record")
-    {
         return record_to_file(argv[2]) ? 0 : 1;
-    }
-    else if (std::string(argv[1]) == "play")
-    {
+
+    if (std::string(argv[1]) == "play")
         return play_file(argv[2]) ? 0 : 1;
-    }
-    else
-    {
-        std::fprintf(stderr, "Unknown command: %s (use 'record' or 'play')\n", argv[1]);
-        return 1;
-    }
+
+    std::fprintf(stderr, "Unknown command: %s (use 'record' or 'play')\n", argv[1]);
+    return 1;
 }
