@@ -145,7 +145,6 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(230, 230, 230));
 
-        // A simple fixed font can look nicer than the default.
         HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
         HFONT old = (HFONT)SelectObject(hdc, font);
 
@@ -158,6 +157,7 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             y += 18;
         };
 
+        // User asked to keep display as-is; leave this line unchanged.
         put("RawIO Overlay (Recording)");
 
         std::snprintf(line, sizeof(line), "Cursor: %ld, %ld", (long)gCursorPt.x, (long)gCursorPt.y);
@@ -238,6 +238,17 @@ static void destroy_overlay_window()
     {
         DestroyWindow(gOverlayHwnd);
         gOverlayHwnd = nullptr;
+    }
+}
+
+// Non-blocking message pump so the overlay can repaint during playback loops.
+static void pump_messages_nonblocking()
+{
+    MSG msg;
+    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
 }
 
@@ -644,6 +655,20 @@ static bool play_file(const char *path)
     countdown_5s("Playback will begin");
     std::puts("Playing...");
 
+    // FIX: Show overlay during playback too
+    ZeroMemory(gMouseBtn, sizeof(gMouseBtn));
+    ZeroMemory(gKeyDown, sizeof(gKeyDown));
+    gLastDx = gLastDy = 0;
+    gLastWheel = 0;
+    GetCursorPos(&gCursorPt);
+
+    bool overlay_ok = create_overlay_window();
+    if (overlay_ok)
+    {
+        overlay_show(true);
+        pump_messages_nonblocking();
+    }
+
     gPlaying = true;
 
     // Improve timer granularity (optional)
@@ -668,22 +693,49 @@ static bool play_file(const char *path)
         {
         case EV_MOUSE_MOVE:
             send_mouse_move_rel(e.a, e.b);
+            // optional: keep overlay responsive even in mouse-only segments
+            GetCursorPos(&gCursorPt);
+            overlay_invalidate();
+            pump_messages_nonblocking();
             break;
+
         case EV_MOUSE_POS:
             send_mouse_move_abs(e.a, e.b);
+            gCursorPt.x = e.a;
+            gCursorPt.y = e.b;
+            overlay_invalidate();
+            pump_messages_nonblocking();
             break;
+
         case EV_MOUSE_WHEEL:
             send_mouse_wheel(e.a);
+            gLastWheel = (int)e.a;
+            overlay_invalidate();
+            pump_messages_nonblocking();
             break;
+
         case EV_MOUSE_BUTTON:
             send_mouse_button(e.a, e.b != 0);
+            if (e.a >= 1 && e.a <= 5)
+                gMouseBtn[e.a] = (e.b != 0);
+            overlay_invalidate();
+            pump_messages_nonblocking();
             break;
+
         case EV_KEY_DOWN:
             send_key(true, (UINT)e.a);
+            // FIX: update overlay key state during playback
+            update_overlay_state_on_key((UINT)e.a, true);
+            pump_messages_nonblocking();
             break;
+
         case EV_KEY_UP:
             send_key(false, (UINT)e.a);
+            // FIX: update overlay key state during playback
+            update_overlay_state_on_key((UINT)e.a, false);
+            pump_messages_nonblocking();
             break;
+
         default:
             break;
         }
@@ -693,6 +745,15 @@ static bool play_file(const char *path)
         timeEndPeriod(tc.wPeriodMin);
 
     gPlaying = false;
+
+    // FIX: cleanup overlay after playback
+    if (overlay_ok)
+    {
+        overlay_show(false);
+        destroy_overlay_window();
+        pump_messages_nonblocking();
+    }
+
     std::puts("Done.");
     return true;
 }
