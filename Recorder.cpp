@@ -1,10 +1,11 @@
-// macro_recplay.cpp
+// macro_recplay_enhanced.cpp
 // Build (MSVC):
-//   cl /EHsc /O2 macro_recplay.cpp user32.lib winmm.lib
+//   cl /EHsc /O2 macro_recplay_enhanced.cpp user32.lib winmm.lib opencv_world4XX.lib /I"path\to\opencv\include" /link /LIBPATH:"path\to\opencv\lib"
 //
 // Notes:
 // - Overlay works over normal windows and borderless fullscreen.
 // - Overlay may NOT appear over "exclusive fullscreen" apps/games (by design of how exclusive fullscreen works).
+// - Image recognition requires OpenCV library
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -16,6 +17,14 @@
 #include <thread>
 #include <chrono>
 #include <iostream>
+#include <cmath>
+
+// OpenCV includes
+#include <opencv2/opencv.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
+
+using namespace cv;
 
 static const char *kSinkClassName = "RawIO_Sink_Window";
 static const char *kOverlayClassName = "RawIO_Overlay_Window";
@@ -46,6 +55,173 @@ struct Event
     int32_t c;     // payload
 };
 #pragma pack(pop)
+
+// --------------------------- Image Recognition Class ---------------------------
+
+class EnemyDetector
+{
+private:
+    Mat enemyTemplate;
+    double matchThreshold;
+    HWND targetWindow;
+
+public:
+    EnemyDetector() : matchThreshold(0.75), targetWindow(nullptr) {}
+
+    bool loadEnemyTemplate(const std::string &templatePath)
+    {
+        enemyTemplate = imread(templatePath, IMREAD_COLOR);
+        if (enemyTemplate.empty())
+        {
+            std::fprintf(stderr, "Failed to load enemy template: %s\n", templatePath.c_str());
+            return false;
+        }
+        std::printf("Enemy template loaded: %dx%d\n", enemyTemplate.cols, enemyTemplate.rows);
+        return true;
+    }
+
+    void setMatchThreshold(double threshold)
+    {
+        matchThreshold = threshold;
+    }
+
+    void setTargetWindow(HWND hwnd)
+    {
+        targetWindow = hwnd;
+    }
+
+    // Capture screenshot of window or entire screen
+    Mat captureScreen(HWND hwnd = nullptr)
+    {
+        HDC hScreen;
+        HDC hDC;
+        HBITMAP hBitmap;
+        int width, height;
+        int offsetX = 0, offsetY = 0;
+
+        if (hwnd == nullptr)
+        {
+            // Capture entire screen
+            hScreen = GetDC(NULL);
+            width = GetSystemMetrics(SM_CXSCREEN);
+            height = GetSystemMetrics(SM_CYSCREEN);
+        }
+        else
+        {
+            // Capture specific window
+            hScreen = GetDC(hwnd);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            width = rc.right - rc.left;
+            height = rc.bottom - rc.top;
+        }
+
+        hDC = CreateCompatibleDC(hScreen);
+        hBitmap = CreateCompatibleBitmap(hScreen, width, height);
+        SelectObject(hDC, hBitmap);
+
+        BitBlt(hDC, 0, 0, width, height, hScreen, offsetX, offsetY, SRCCOPY);
+
+        // Convert HBITMAP to Mat
+        BITMAPINFOHEADER bi = {};
+        bi.biSize = sizeof(BITMAPINFOHEADER);
+        bi.biWidth = width;
+        bi.biHeight = -height; // Negative for top-down bitmap
+        bi.biPlanes = 1;
+        bi.biBitCount = 32;
+        bi.biCompression = BI_RGB;
+
+        Mat mat(height, width, CV_8UC4);
+        GetDIBits(hDC, hBitmap, 0, height, mat.data,
+                  (BITMAPINFO *)&bi, DIB_RGB_COLORS);
+
+        // Convert BGRA to BGR
+        Mat result;
+        cvtColor(mat, result, COLOR_BGRA2BGR);
+
+        DeleteObject(hBitmap);
+        DeleteDC(hDC);
+        ReleaseDC(hwnd, hScreen);
+
+        return result;
+    }
+
+    // Find enemy on screen using template matching
+    Point findEnemy(const Mat &screen, double *outConfidence = nullptr)
+    {
+        if (enemyTemplate.empty())
+        {
+            std::fprintf(stderr, "Enemy template not loaded!\n");
+            return Point(-1, -1);
+        }
+
+        Mat result;
+        int matchMethod = TM_CCOEFF_NORMED;
+
+        // Perform template matching
+        matchTemplate(screen, enemyTemplate, result, matchMethod);
+
+        // Find the best match
+        double minVal, maxVal;
+        Point minLoc, maxLoc;
+        minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
+
+        if (outConfidence)
+        {
+            *outConfidence = maxVal;
+        }
+
+        // Check if match is good enough
+        if (maxVal >= matchThreshold)
+        {
+            // Return center of the matched region
+            Point center(
+                maxLoc.x + enemyTemplate.cols / 2,
+                maxLoc.y + enemyTemplate.rows / 2);
+
+            std::printf("Enemy found at (%d, %d) with confidence %.2f\n",
+                        center.x, center.y, maxVal);
+            return center;
+        }
+
+        return Point(-1, -1); // No enemy found
+    }
+
+    // Get current cursor position
+    Point getCurrentCursorPos()
+    {
+        POINT pt;
+        GetCursorPos(&pt);
+        return Point(pt.x, pt.y);
+    }
+
+    // Calculate distance between two points
+    double distance(const Point &p1, const Point &p2)
+    {
+        int dx = p2.x - p1.x;
+        int dy = p2.y - p1.y;
+        return std::sqrt(dx * dx + dy * dy);
+    }
+
+    // Move cursor smoothly towards target
+    void moveCursorTowards(const Point &target, int steps = 20)
+    {
+        Point current = getCurrentCursorPos();
+
+        for (int i = 1; i <= steps; ++i)
+        {
+            double t = (double)i / steps;
+            int x = (int)(current.x + (target.x - current.x) * t);
+            int y = (int)(current.y + (target.y - current.y) * t);
+
+            SetCursorPos(x, y);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+};
+
+// Global enemy detector instance
+static EnemyDetector gEnemyDetector;
 
 // --------------------------- Globals ---------------------------
 
@@ -562,6 +738,124 @@ static void send_key(bool down, UINT vk)
     SendInput(1, &in, sizeof(INPUT));
 }
 
+// --------------------------- Enemy Detection and Combat ---------------------------
+
+// Hunt for enemy and initiate combat
+static bool hunt_and_attack_enemy(const char *templatePath, double threshold = 0.75, int maxAttempts = 10)
+{
+    std::printf("\n=== Starting Enemy Hunt Mode ===\n");
+
+    if (!gEnemyDetector.loadEnemyTemplate(templatePath))
+    {
+        return false;
+    }
+
+    gEnemyDetector.setMatchThreshold(threshold);
+
+    for (int attempt = 1; attempt <= maxAttempts; ++attempt)
+    {
+        std::printf("\nAttempt %d/%d: Scanning for enemy...\n", attempt, maxAttempts);
+
+        // Capture current screen
+        Mat screen = gEnemyDetector.captureScreen();
+
+        // Find enemy
+        double confidence = 0.0;
+        Point enemyPos = gEnemyDetector.findEnemy(screen, &confidence);
+
+        if (enemyPos.x >= 0 && enemyPos.y >= 0)
+        {
+            std::printf("Enemy detected! Moving to position...\n");
+
+            // Move cursor to enemy position smoothly
+            gEnemyDetector.moveCursorTowards(enemyPos, 30);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+            // Click to attack
+            std::printf("Attacking enemy!\n");
+            send_mouse_button(1, true); // Left button down
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            send_mouse_button(1, false); // Left button up
+
+            std::printf("Combat initiated successfully!\n");
+            return true;
+        }
+
+        std::printf("No enemy found (confidence: %.2f < %.2f)\n", confidence, threshold);
+
+        // Wait before next attempt
+        if (attempt < maxAttempts)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+    }
+
+    std::printf("\nFailed to find enemy after %d attempts.\n", maxAttempts);
+    return false;
+}
+
+// Continuous enemy detection mode
+static void auto_hunt_mode(const char *templatePath, double threshold = 0.75, int scanIntervalMs = 1000)
+{
+    std::printf("\n=== Auto Hunt Mode ===\n");
+    std::printf("Press ESC to stop\n\n");
+
+    if (!gEnemyDetector.loadEnemyTemplate(templatePath))
+    {
+        return;
+    }
+
+    gEnemyDetector.setMatchThreshold(threshold);
+
+    countdown_5s("Auto hunt will start");
+
+    int scanCount = 0;
+    while (true)
+    {
+        // Check for ESC key to stop
+        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+        {
+            std::printf("\nAuto hunt stopped by user.\n");
+            break;
+        }
+
+        scanCount++;
+        std::printf("\rScan #%d...", scanCount);
+        std::fflush(stdout);
+
+        // Capture screen
+        Mat screen = gEnemyDetector.captureScreen();
+
+        // Find enemy
+        double confidence = 0.0;
+        Point enemyPos = gEnemyDetector.findEnemy(screen, &confidence);
+
+        if (enemyPos.x >= 0 && enemyPos.y >= 0)
+        {
+            std::printf("\n[FOUND] Enemy at (%d, %d), confidence: %.2f\n",
+                        enemyPos.x, enemyPos.y, confidence);
+
+            // Move to enemy
+            gEnemyDetector.moveCursorTowards(enemyPos, 30);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+            // Attack
+            send_mouse_button(1, true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            send_mouse_button(1, false);
+
+            std::printf("Attacked! Waiting for combat to resolve...\n");
+
+            // Wait for combat (adjust this based on your game)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+        }
+
+        // Wait before next scan
+        std::this_thread::sleep_for(std::chrono::milliseconds(scanIntervalMs));
+    }
+}
+
 // --------------------------- Record / Play ---------------------------
 
 static bool record_to_file(const char *path)
@@ -767,17 +1061,45 @@ int main(int argc, char **argv)
         std::printf(
             "Usage:\n"
             "  %s record <file.rmac>\n"
-            "  %s play   <file.rmac>\n",
-            argv[0], argv[0]);
+            "  %s play <file.rmac>\n"
+            "  %s hunt <enemy_template.png> [threshold] [max_attempts]\n"
+            "  %s auto <enemy_template.png> [threshold] [scan_interval_ms]\n"
+            "\n"
+            "Hunt Mode: Find enemy once and attack\n"
+            "  threshold: 0.0-1.0 (default: 0.75)\n"
+            "  max_attempts: number of scans (default: 10)\n"
+            "\n"
+            "Auto Mode: Continuously scan and attack enemies\n"
+            "  threshold: 0.0-1.0 (default: 0.75)\n"
+            "  scan_interval_ms: ms between scans (default: 1000)\n",
+            argv[0], argv[0], argv[0], argv[0]);
         return 0;
     }
 
-    if (std::string(argv[1]) == "record")
+    std::string cmd = argv[1];
+
+    if (cmd == "record")
+    {
         return record_to_file(argv[2]) ? 0 : 1;
-
-    if (std::string(argv[1]) == "play")
+    }
+    else if (cmd == "play")
+    {
         return play_file(argv[2]) ? 0 : 1;
+    }
+    else if (cmd == "hunt")
+    {
+        double threshold = (argc >= 4) ? std::atof(argv[3]) : 0.75;
+        int maxAttempts = (argc >= 5) ? std::atoi(argv[4]) : 10;
+        return hunt_and_attack_enemy(argv[2], threshold, maxAttempts) ? 0 : 1;
+    }
+    else if (cmd == "auto")
+    {
+        double threshold = (argc >= 4) ? std::atof(argv[3]) : 0.75;
+        int scanInterval = (argc >= 5) ? std::atoi(argv[4]) : 1000;
+        auto_hunt_mode(argv[2], threshold, scanInterval);
+        return 0;
+    }
 
-    std::fprintf(stderr, "Unknown command: %s (use 'record' or 'play')\n", argv[1]);
+    std::fprintf(stderr, "Unknown command: %s (use 'record', 'play', 'hunt', or 'auto')\n", cmd.c_str());
     return 1;
 }
