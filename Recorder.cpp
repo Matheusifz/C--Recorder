@@ -1,19 +1,14 @@
 // Recorder.cpp  (macro recorder + playback + OpenCV template hunt)
 //
-// Behavior:
-// - record <file.rmac> : records raw mouse/keyboard input only
-// - play   <file.rmac> : plays back recorded input only
-// - recordhunt <file.rmac> <enemy_templates_path> <battle_start.png> [enemy_th] [battle_th] [scan_ms] [cooldown_ms]
-//      -> starts auto-hunt in SCAN-ONLY mode while recording; stops hunting when BattleStart is detected
-//         After it stops due to BattleStart, press SHIFT to start hunting again.
-// - playhunt   <file.rmac> <enemy_templates_path> <battle_start.png> [enemy_th] [battle_th] [scan_ms] [cooldown_ms]
-//      -> starts auto-hunt in ATTACK mode while playing; stops hunting when BattleStart is detected
-//         After it stops due to BattleStart, press SHIFT to start hunting again.
+// Commands:
+//   Recorder.exe record        <file.rmac>
+//   Recorder.exe play          <file.rmac>
+//   Recorder.exe recordhunt    <file.rmac> <enemy_path> <battle_start.png> [enemy_th] [battle_th] [scan_ms] [cooldown_ms]
+//   Recorder.exe playhunt      <file.rmac> <enemy_path> <battle_start.png> [enemy_th] [battle_th] [scan_ms] [cooldown_ms]
 //
-// Notes:
-// - "Hunt" uses template matching; resolution/UI should stay consistent.
-// - Enemy templates can be a single image file OR a folder of images.
-// - BattleStart.png should be a tight crop for reliability.
+// Behavior:
+// - recordhunt: hunter runs SCAN-ONLY (no clicks) during recording; stops when BattleStart detected; SHIFT restarts hunting
+// - playhunt  : hunter runs SCAN+ATTACK during playback; stops when BattleStart detected; SHIFT restarts hunting
 //
 // Build (MSVC, x64 tools prompt):
 //   cl /EHsc /O2 /MD Recorder.cpp user32.lib winmm.lib gdi32.lib ^
@@ -37,6 +32,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgproc.hpp>
@@ -92,7 +88,8 @@ static bool gMouseBtn[6] = {};
 static bool gKeyDown[256] = {};
 static POINT gCursorPt{};
 
-// Hunt state + config (saved so SHIFT can restart)
+// --------------------------- Hunt config/state ---------------------------
+
 static std::atomic<bool> gAutoHuntRun{false};
 static std::thread gAutoHuntThread;
 static std::atomic<bool> gBattleStarted{false};
@@ -104,20 +101,66 @@ static double gBattleTh = 0.88;
 static int gScanMs = 200;
 static int gCooldownMs = 900;
 
+struct HuntInfo
+{
+    std::atomic<int> detections{0};
+    std::atomic<int> attacks{0};
+    std::atomic<int> lastX{-1};
+    std::atomic<int> lastY{-1};
+    std::atomic<double> lastConf{0.0};
+    std::atomic<bool> lastWasBattle{false};
+
+    mutable std::mutex nameMu;
+    char lastName[256]{};
+
+    void setLastName(const char *s)
+    {
+        std::lock_guard<std::mutex> lk(nameMu);
+        std::snprintf(lastName, sizeof(lastName), "%s", (s && s[0]) ? s : "(unknown)");
+    }
+    void getLastName(char *out, size_t outSz) const
+    {
+        std::lock_guard<std::mutex> lk(nameMu);
+        std::snprintf(out, outSz, "%s", lastName[0] ? lastName : "(none)");
+    }
+};
+static HuntInfo gHuntInfo;
+
+// --------------------------- DPI Awareness ---------------------------
+
+static void enable_dpi_awareness()
+{
+    HMODULE user32 = LoadLibraryA("user32.dll");
+    if (user32)
+    {
+        using SetDpiCtxFn = BOOL(WINAPI *)(DPI_AWARENESS_CONTEXT);
+        auto pSetCtx = (SetDpiCtxFn)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+        if (pSetCtx)
+        {
+            pSetCtx(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            FreeLibrary(user32);
+            return;
+        }
+        FreeLibrary(user32);
+    }
+    SetProcessDPIAware();
+}
+
 // --------------------------- Timing / IO ---------------------------
 
 static uint64_t now_us_since_start()
 {
     LARGE_INTEGER t;
     QueryPerformanceCounter(&t);
-    const long double dt = (long double)(t.QuadPart - gT0.QuadPart) / (long double)gFreq.QuadPart;
+    const long double dt =
+        (long double)(t.QuadPart - gT0.QuadPart) / (long double)gFreq.QuadPart;
     return (uint64_t)(dt * 1000000.0L);
 }
 
-static void countdown_5s(const char *msg)
+static void countdown_3s(const char *msg)
 {
-    std::cout << msg << " in 5 seconds...\n";
-    for (int i = 5; i > 0; --i)
+    std::cout << msg << " in 3 seconds...\n";
+    for (int i = 3; i > 0; --i)
     {
         std::cout << i << "...\n";
         Sleep(1000);
@@ -155,9 +198,19 @@ static void overlay_show(bool on)
 {
     if (!gOverlayHwnd)
         return;
-    ShowWindow(gOverlayHwnd, on ? SW_SHOWNOACTIVATE : SW_HIDE);
+
     if (on)
+    {
+        ShowWindow(gOverlayHwnd, SW_SHOWNOACTIVATE);
+        SetWindowPos(gOverlayHwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        UpdateWindow(gOverlayHwnd);
         overlay_invalidate();
+    }
+    else
+    {
+        ShowWindow(gOverlayHwnd, SW_HIDE);
+    }
 }
 
 static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -187,7 +240,6 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         char line[512];
         int y = 8;
-
         auto put = [&](const char *s)
         {
             TextOutA(hdc, 8, y, s, (int)std::strlen(s));
@@ -210,13 +262,26 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         put(line);
 
         std::snprintf(line, sizeof(line),
-                      "Keys: W=%d A=%d S=%d D=%d  Shift=%d Ctrl=%d Alt=%d Space=%d",
+                      "Keys: W=%d A=%d S=%d D=%d Shift=%d Ctrl=%d Alt=%d Space=%d",
                       gKeyDown['W'], gKeyDown['A'], gKeyDown['S'], gKeyDown['D'],
                       gKeyDown[VK_SHIFT], gKeyDown[VK_CONTROL], gKeyDown[VK_MENU], gKeyDown[VK_SPACE]);
         put(line);
 
         std::snprintf(line, sizeof(line), "AutoHunt: %d  BattleStarted: %d",
                       (int)gAutoHuntRun.load(), (int)gBattleStarted.load());
+        put(line);
+
+        char nm[256];
+        gHuntInfo.getLastName(nm, sizeof(nm));
+        std::snprintf(line, sizeof(line), "Hunt: det=%d atk=%d",
+                      gHuntInfo.detections.load(), gHuntInfo.attacks.load());
+        put(line);
+
+        std::snprintf(line, sizeof(line), "Last: %s conf=%.2f pos=(%d,%d)%s",
+                      nm,
+                      gHuntInfo.lastConf.load(),
+                      gHuntInfo.lastX.load(), gHuntInfo.lastY.load(),
+                      gHuntInfo.lastWasBattle.load() ? " [BATTLE]" : "");
         put(line);
 
         SelectObject(hdc, old);
@@ -247,7 +312,7 @@ static bool create_overlay_window()
         }
     }
 
-    const int w = 330, h = 220;
+    const int w = 360, h = 260;
     const int x = 10, y = 10;
 
     DWORD ex = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
@@ -356,9 +421,7 @@ static LRESULT CALLBACK SinkProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 
                     bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
                     if (!altDown)
-                    {
                         write_event(EV_MOUSE_MOVE, (int32_t)dx, (int32_t)dy, 0);
-                    }
                     else
                     {
                         POINT pt{};
@@ -415,6 +478,13 @@ static LRESULT CALLBACK SinkProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             if (vk == 255)
                 break;
 
+            // FIX: ESC stops recording but is NOT written to the macro file.
+            if (!isBreak && vk == VK_ESCAPE)
+            {
+                PostMessage(hwnd, WM_CLOSE, 0, 0);
+                break;
+            }
+
             if (isBreak)
             {
                 write_event(EV_KEY_UP, (int32_t)vk, 0, 0);
@@ -424,11 +494,6 @@ static LRESULT CALLBACK SinkProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             {
                 write_event(EV_KEY_DOWN, (int32_t)vk, 0, 0);
                 update_overlay_state_on_key(vk, true);
-            }
-
-            if (!isBreak && vk == VK_ESCAPE)
-            {
-                PostMessage(hwnd, WM_CLOSE, 0, 0);
             }
         }
         break;
@@ -516,6 +581,7 @@ static void send_mouse_move_abs(int x, int y)
 
     double relx = (double)(x - vsx) / (double)vsw;
     double rely = (double)(y - vsy) / (double)vsh;
+
     if (relx < 0.0)
         relx = 0.0;
     if (relx > 1.0)
@@ -599,22 +665,18 @@ public:
         }
 
         if (attr & FILE_ATTRIBUTE_DIRECTORY)
-        {
             return loadFolder(path);
-        }
-        else
+
+        Mat img = imread(path, IMREAD_COLOR);
+        if (img.empty())
         {
-            Mat img = imread(path, IMREAD_COLOR);
-            if (img.empty())
-            {
-                std::fprintf(stderr, "Failed to load enemy template: %s\n", path.c_str());
-                return false;
-            }
-            enemies_.push_back(img);
-            enemyNames_.push_back(path);
-            std::printf("Loaded enemy template: %s (%dx%d)\n", path.c_str(), img.cols, img.rows);
-            return true;
+            std::fprintf(stderr, "Failed to load enemy template: %s\n", path.c_str());
+            return false;
         }
+        enemies_.push_back(img);
+        enemyNames_.push_back(path);
+        std::printf("Loaded enemy template: %s (%dx%d)\n", path.c_str(), img.cols, img.rows);
+        return true;
     }
 
     bool loadBattleStartTemplate(const std::string &file)
@@ -632,28 +694,31 @@ public:
     void setEnemyThreshold(double t) { enemyTh_ = t; }
     void setBattleThreshold(double t) { battleTh_ = t; }
 
-    Mat captureScreen()
+    Mat captureScreen() const
     {
-        HDC hScreen = GetDC(NULL);
-        int width = GetSystemMetrics(SM_CXSCREEN);
-        int height = GetSystemMetrics(SM_CYSCREEN);
+        // Virtual screen for multi-monitor + works with windowed/borderless
+        const int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        const int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        const int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        const int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
+        HDC hScreen = GetDC(NULL);
         HDC hDC = CreateCompatibleDC(hScreen);
-        HBITMAP hBmp = CreateCompatibleBitmap(hScreen, width, height);
+        HBITMAP hBmp = CreateCompatibleBitmap(hScreen, vw, vh);
         HGDIOBJ old = SelectObject(hDC, hBmp);
 
-        BitBlt(hDC, 0, 0, width, height, hScreen, 0, 0, SRCCOPY);
+        BitBlt(hDC, 0, 0, vw, vh, hScreen, vx, vy, SRCCOPY | CAPTUREBLT);
 
         BITMAPINFOHEADER bi{};
         bi.biSize = sizeof(BITMAPINFOHEADER);
-        bi.biWidth = width;
-        bi.biHeight = -height;
+        bi.biWidth = vw;
+        bi.biHeight = -vh;
         bi.biPlanes = 1;
         bi.biBitCount = 32;
         bi.biCompression = BI_RGB;
 
-        Mat bgra(height, width, CV_8UC4);
-        GetDIBits(hDC, hBmp, 0, height, bgra.data, (BITMAPINFO *)&bi, DIB_RGB_COLORS);
+        Mat bgra(vh, vw, CV_8UC4);
+        GetDIBits(hDC, hBmp, 0, vh, bgra.data, (BITMAPINFO *)&bi, DIB_RGB_COLORS);
 
         SelectObject(hDC, old);
         DeleteObject(hBmp);
@@ -731,6 +796,7 @@ public:
                          bestLoc.y + enemies_[bestIdx].rows / 2);
             return center;
         }
+
         return Point(-1, -1);
     }
 
@@ -762,7 +828,7 @@ private:
     {
         std::string s = name;
         for (char &c : s)
-            c = (char)tolower(c);
+            c = (char)tolower((unsigned char)c);
         if (s.size() >= 4)
         {
             if (s.rfind(".png") == s.size() - 4)
@@ -828,6 +894,18 @@ private:
 
 static TemplateDetector gDet;
 
+static void debug_save_capture_once()
+{
+    cv::Mat s = gDet.captureScreen();
+    if (s.empty())
+    {
+        std::printf("[DEBUG] captureScreen returned empty Mat\n");
+        return;
+    }
+    cv::imwrite("debug_capture.png", s);
+    std::printf("[DEBUG] Wrote debug_capture.png (%dx%d)\n", s.cols, s.rows);
+}
+
 // --------------------------- Hunt control ---------------------------
 
 static void stop_auto_hunt()
@@ -841,11 +919,8 @@ static void start_auto_hunt_with_saved_config(); // forward
 
 static void maybe_restart_hunt_on_shift()
 {
-    // edge-trigger: pressed since last call
     if ((GetAsyncKeyState(VK_SHIFT) & 1) == 0)
         return;
-
-    // Only restart if hunt is OFF and it stopped because of BattleStart
     if (gAutoHuntRun.load())
         return;
     if (!gBattleStarted.load())
@@ -866,6 +941,15 @@ static void start_auto_hunt(const char *enemyTemplatesPath,
 
     gBattleStarted = false;
 
+    gHuntInfo.detections = 0;
+    gHuntInfo.attacks = 0;
+    gHuntInfo.lastX = -1;
+    gHuntInfo.lastY = -1;
+    gHuntInfo.lastConf = 0.0;
+    gHuntInfo.lastWasBattle = false;
+    gHuntInfo.setLastName("(none)");
+    overlay_invalidate();
+
     if (!gDet.loadEnemyTemplates(enemyTemplatesPath))
     {
         std::fprintf(stderr, "Auto-hunt: failed to load enemy templates: %s\n", enemyTemplatesPath);
@@ -876,6 +960,8 @@ static void start_auto_hunt(const char *enemyTemplatesPath,
         std::fprintf(stderr, "Auto-hunt: failed to load battle-start template: %s\n", battleStartTemplatePath);
         return;
     }
+
+    debug_save_capture_once();
 
     gDet.setEnemyThreshold(enemyThreshold);
     gDet.setBattleThreshold(battleThreshold);
@@ -890,25 +976,34 @@ static void start_auto_hunt(const char *enemyTemplatesPath,
     gAutoHuntThread = std::thread([=]()
                                   {
         auto lastAttack = std::chrono::steady_clock::now() - std::chrono::milliseconds(attackCooldownMs);
+        int tick = 0;
 
-        while (gAutoHuntRun) {
-            if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
-                gAutoHuntRun = false;
-                break;
-            }
+        std::printf("[HUNT] Thread started.\n");
 
-            // If neither recording nor playing, stop
-            if (!gRecording && !gPlaying) {
-                gAutoHuntRun = false;
-                break;
+        while (gAutoHuntRun)
+        {
+            // Wait until record/play becomes active
+            if (!gRecording && !gPlaying)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                continue;
             }
 
             Mat screen = gDet.captureScreen();
 
             // 1) battle start stops hunting
             double battleConf = 0.0;
-            if (gDet.isBattleStart(screen, &battleConf)) {
+            if (gDet.isBattleStart(screen, &battleConf))
+            {
                 gBattleStarted = true;
+
+                gHuntInfo.lastWasBattle = true;
+                gHuntInfo.lastConf = battleConf;
+                gHuntInfo.setLastName("BattleStart");
+                gHuntInfo.lastX = -1;
+                gHuntInfo.lastY = -1;
+                overlay_invalidate();
+
                 std::printf("[HUNT] Battle Start detected (conf=%.2f). Hunt OFF. Press SHIFT to restart.\n", battleConf);
                 gAutoHuntRun = false;
                 break;
@@ -919,23 +1014,44 @@ static void start_auto_hunt(const char *enemyTemplatesPath,
             int idx = -1;
             Point p = gDet.findEnemy(screen, &enemyConf, &idx);
 
-            if (p.x >= 0 && p.y >= 0) {
-                if (gPlaying) {
-                    // PLAYBACK: attack (cooldown)
+            tick++;
+            if ((tick % 25) == 0)
+            {
+                std::printf("[DEBUG] bestEnemyConf=%.3f enemyTh=%.3f best=%s\n",
+                            enemyConf, enemyThreshold, gDet.enemyName(idx));
+            }
+
+            if (p.x >= 0 && p.y >= 0)
+            {
+                gHuntInfo.lastWasBattle = false;
+                gHuntInfo.lastConf = enemyConf;
+                gHuntInfo.lastX = p.x;
+                gHuntInfo.lastY = p.y;
+                gHuntInfo.setLastName(gDet.enemyName(idx));
+                gHuntInfo.detections++;
+                overlay_invalidate();
+
+                if (gPlaying)
+                {
                     auto now = std::chrono::steady_clock::now();
-                    if (now - lastAttack >= std::chrono::milliseconds(attackCooldownMs)) {
+                    if (now - lastAttack >= std::chrono::milliseconds(attackCooldownMs))
+                    {
                         TemplateDetector::moveCursorTowards(p, 18, 6);
                         send_mouse_button(1, true);
                         std::this_thread::sleep_for(std::chrono::milliseconds(35));
                         send_mouse_button(1, false);
+
+                        gHuntInfo.attacks++;
+                        overlay_invalidate();
 
                         std::printf("[HUNT] Attacked: %s conf=%.2f at=(%d,%d)\n",
                                     gDet.enemyName(idx), enemyConf, p.x, p.y);
 
                         lastAttack = now;
                     }
-                } else {
-                    // RECORDING: scan-only
+                }
+                else
+                {
                     std::printf("[SCAN] Enemy detected: %s conf=%.2f at=(%d,%d)\n",
                                 gDet.enemyName(idx), enemyConf, p.x, p.y);
                 }
@@ -992,7 +1108,7 @@ static bool record_to_file(const char *path)
     QueryPerformanceFrequency(&gFreq);
     QueryPerformanceCounter(&gT0);
 
-    countdown_5s("Recording will begin");
+    countdown_3s("Recording will begin");
 
     gRecording = true;
     overlay_show(true);
@@ -1002,9 +1118,7 @@ static bool record_to_file(const char *path)
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
     {
-        // allow SHIFT restart while recording
         maybe_restart_hunt_on_shift();
-
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
@@ -1050,8 +1164,12 @@ static bool play_file(const char *path)
         events.push_back(ev);
     std::fclose(in);
 
-    countdown_5s("Playback will begin");
+    countdown_3s("Playback will begin");
     std::puts("Playing... (ESC to stop)");
+
+    // Debounce physical ESC so playback doesn't instantly stop
+    while (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+        Sleep(10);
 
     ZeroMemory(gMouseBtn, sizeof(gMouseBtn));
     ZeroMemory(gKeyDown, sizeof(gKeyDown));
@@ -1076,7 +1194,6 @@ static bool play_file(const char *path)
     uint64_t prev_t = 0;
     for (size_t i = 0; i < events.size(); ++i)
     {
-        // allow SHIFT restart while playing
         maybe_restart_hunt_on_shift();
 
         if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
@@ -1163,7 +1280,7 @@ static bool play_file(const char *path)
     return true;
 }
 
-// --------------------------- Commands ---------------------------
+// --------------------------- Commands (hunt wrappers) ---------------------------
 
 static bool record_hunt(const char *file,
                         const char *enemiesPath,
@@ -1171,7 +1288,6 @@ static bool record_hunt(const char *file,
                         double enemyTh, double battleTh,
                         int scanMs, int cooldownMs)
 {
-    // Save config for SHIFT restart
     gEnemyTemplatesPath = enemiesPath;
     gBattleStartPath = battleStartPath;
     gEnemyTh = enemyTh;
@@ -1189,7 +1305,6 @@ static bool play_hunt(const char *file,
                       double enemyTh, double battleTh,
                       int scanMs, int cooldownMs)
 {
-    // Save config for SHIFT restart
     gEnemyTemplatesPath = enemiesPath;
     gBattleStartPath = battleStartPath;
     gEnemyTh = enemyTh;
@@ -1205,14 +1320,16 @@ static bool play_hunt(const char *file,
 
 int main(int argc, char **argv)
 {
+    enable_dpi_awareness();
+
     if (argc < 3)
     {
         std::printf(
             "Usage:\n"
-            "  %s record <file.rmac>\n"
-            "  %s play <file.rmac>\n"
-            "  %s recordhunt <file.rmac> <enemy_templates_path> <battle_start.png> [enemy_th] [battle_th] [scan_ms] [cooldown_ms]\n"
-            "  %s playhunt   <file.rmac> <enemy_templates_path> <battle_start.png> [enemy_th] [battle_th] [scan_ms] [cooldown_ms]\n"
+            "  %s record      <file.rmac>\n"
+            "  %s play        <file.rmac>\n"
+            "  %s recordhunt  <file.rmac> <enemy_path> <battle_start.png> [enemy_th] [battle_th] [scan_ms] [cooldown_ms]\n"
+            "  %s playhunt    <file.rmac> <enemy_path> <battle_start.png> [enemy_th] [battle_th] [scan_ms] [cooldown_ms]\n"
             "\n"
             "Defaults:\n"
             "  enemy_th=0.75  battle_th=0.88  scan_ms=200  cooldown_ms=900\n"
@@ -1229,19 +1346,16 @@ int main(int argc, char **argv)
     std::string cmd = argv[1];
 
     if (cmd == "record")
-    {
         return record_to_file(argv[2]) ? 0 : 1;
-    }
+
     if (cmd == "play")
-    {
         return play_file(argv[2]) ? 0 : 1;
-    }
 
     if (cmd == "recordhunt" || cmd == "playhunt")
     {
         if (argc < 5)
         {
-            std::fprintf(stderr, "%s needs: <file.rmac> <enemy_templates_path> <battle_start.png>\n", cmd.c_str());
+            std::fprintf(stderr, "%s needs: <file.rmac> <enemy_path> <battle_start.png>\n", cmd.c_str());
             return 1;
         }
 
@@ -1256,8 +1370,8 @@ int main(int argc, char **argv)
 
         if (cmd == "recordhunt")
             return record_hunt(file, enemiesPath, battlePath, enemyTh, battleTh, scanMs, cooldownMs) ? 0 : 1;
-        else
-            return play_hunt(file, enemiesPath, battlePath, enemyTh, battleTh, scanMs, cooldownMs) ? 0 : 1;
+
+        return play_hunt(file, enemiesPath, battlePath, enemyTh, battleTh, scanMs, cooldownMs) ? 0 : 1;
     }
 
     std::fprintf(stderr, "Unknown command: %s\n", cmd.c_str());
