@@ -1762,19 +1762,14 @@ static void quest_walk_standalone(const cv::Mat &questTempl, double markerTh, in
 }
 
 // ========================= Full integrated mode =========================
+// Records macro + hunts enemies. Quest walk is intentionally NOT active
+// during recording - use playfull to replay with quest walk guidance.
 
 static bool run_full_integrated(const char *macroFile)
 {
     gEnemyTemplatesPath = kDefaultEnemyPath;
     gBattleStartPath = kDefaultBattlePath;
     gAbsCursorTemplatePath = kDefaultCursorPath;
-
-    cv::Mat questTempl = cv::imread(kDefaultQuestPath, cv::IMREAD_COLOR);
-    if (questTempl.empty())
-    {
-        std::fprintf(stderr, "[FULL] Failed quest marker: %s\n", kDefaultQuestPath);
-        return false;
-    }
 
     ZeroMemory(gMouseBtn, sizeof(gMouseBtn));
     ZeroMemory(gKeyDown, sizeof(gKeyDown));
@@ -1822,13 +1817,14 @@ static bool run_full_integrated(const char *macroFile)
 
     start_abs_poll_thread();
     start_cursor_detect_thread();
+    // Hunt runs during recording so enemies are detected while you play manually
     start_auto_hunt(kDefaultEnemyPath, kDefaultBattlePath, gEnemyTh, gBattleTh, gScanMs, gCooldownMs);
-    start_quest_walk(questTempl, gMarkerTh, gDeadzonePx, gQuestTickMs);
+    // Quest walk is NOT started here - use playfull for guided replay
 
-    countdown_3s("[FULL] Recording + Hunt + QuestWalk");
+    countdown_3s("[FULL] Recording + Hunt (no quest walk - use playfull to replay)");
     gRecording = true;
     overlay_show(true);
-    std::puts("[FULL] Running. ESC to stop all.");
+    std::puts("[FULL] Recording. ESC to stop. Use playfull to replay with quest walk.");
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
@@ -1850,7 +1846,165 @@ static bool run_full_integrated(const char *macroFile)
     }
     destroy_overlay_window();
     destroy_sink_window();
-    std::puts("[FULL] Stopped.");
+    std::puts("[FULL] Recording stopped.");
+    return true;
+}
+
+// ========================= Play full (replay + hunt + quest walk) =========================
+// Replays a recorded macro while simultaneously:
+//   - Running the hunt thread (detects + attacks enemies)
+//   - Running the quest walk thread (OCR distance, steers toward marker)
+// This is the intended way to use quest walk - guiding replay, not recording.
+
+static bool play_full(const char *macroFile,
+                      double markerTh, int deadzonePx, int tickMs,
+                      double enemyTh, double battleTh, int scanMs, int cooldownMs)
+{
+    // Load quest marker template
+    cv::Mat questTempl = cv::imread(kDefaultQuestPath, cv::IMREAD_COLOR);
+    if (questTempl.empty())
+    {
+        std::fprintf(stderr, "[PLAYFULL] Failed to load quest marker: %s\n", kDefaultQuestPath);
+        return false;
+    }
+
+    // Load macro file
+    FILE *in = std::fopen(macroFile, "rb");
+    if (!in)
+    {
+        std::fprintf(stderr, "[PLAYFULL] Cannot open: %s\n", macroFile);
+        return false;
+    }
+
+    FileHeader hdr{};
+    if (read_exact(in, &hdr, sizeof(hdr)) != sizeof(hdr) || hdr.magic != 0x524D4143)
+    {
+        std::fprintf(stderr, "[PLAYFULL] Invalid file format.\n");
+        std::fclose(in);
+        return false;
+    }
+
+    std::vector<Event> events;
+    Event ev{};
+    while (read_exact(in, &ev, sizeof(ev)) == sizeof(ev))
+        events.push_back(ev);
+    std::fclose(in);
+    std::printf("[PLAYFULL] Loaded %zu events from %s\n", events.size(), macroFile);
+
+    // Setup hunt config
+    gEnemyTemplatesPath = kDefaultEnemyPath;
+    gBattleStartPath = kDefaultBattlePath;
+    gAbsCursorTemplatePath = kDefaultCursorPath;
+    gEnemyTh = enemyTh;
+    gBattleTh = battleTh;
+    gScanMs = scanMs;
+    gCooldownMs = cooldownMs;
+    gMarkerTh = markerTh;
+    gDeadzonePx = deadzonePx;
+    gQuestTickMs = tickMs;
+
+    countdown_3s("[PLAYFULL] Playback + Hunt + QuestWalk begin");
+    std::puts("[PLAYFULL] Running. ESC to stop.");
+    while (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+        Sleep(10);
+
+    ZeroMemory(gMouseBtn, sizeof(gMouseBtn));
+    ZeroMemory(gKeyDown, sizeof(gKeyDown));
+    gLastDx = gLastDy = 0;
+    gLastWheel = 0;
+    GetCursorPos(&gCursorPt);
+    gAbsByAlt = false;
+    gAbsByCursor = false;
+
+    bool overlay_ok = create_overlay_window();
+    if (overlay_ok)
+    {
+        overlay_show(true);
+        pump_messages_nonblocking();
+    }
+
+    gPlaying = true;
+    timeBeginPeriod(1);
+
+    // Start all assistance threads
+    start_cursor_detect_thread();
+    start_auto_hunt(kDefaultEnemyPath, kDefaultBattlePath, enemyTh, battleTh, scanMs, cooldownMs);
+    start_quest_walk(questTempl, markerTh, deadzonePx, tickMs);
+
+    // Replay macro events
+    uint64_t prev_t = 0;
+    for (size_t i = 0; i < events.size(); ++i)
+    {
+        maybe_restart_hunt_on_shift();
+        gAbsByAlt = ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
+
+        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+        {
+            std::puts("[PLAYFULL] Stopped by ESC.");
+            break;
+        }
+
+        const Event &e = events[i];
+        if (e.t_us > prev_t)
+            std::this_thread::sleep_for(std::chrono::microseconds(e.t_us - prev_t));
+        prev_t = e.t_us;
+
+        switch (e.type)
+        {
+        case EV_MOUSE_MOVE:
+            send_mouse_move_rel(e.a, e.b);
+            GetCursorPos(&gCursorPt);
+            gLastDx = e.a;
+            gLastDy = e.b;
+            overlay_invalidate();
+            pump_messages_nonblocking();
+            break;
+        case EV_MOUSE_POS:
+            send_mouse_move_abs(e.a, e.b);
+            gCursorPt.x = e.a;
+            gCursorPt.y = e.b;
+            overlay_invalidate();
+            pump_messages_nonblocking();
+            break;
+        case EV_MOUSE_WHEEL:
+            send_mouse_wheel(e.a);
+            gLastWheel = (int)e.a;
+            overlay_invalidate();
+            pump_messages_nonblocking();
+            break;
+        case EV_MOUSE_BUTTON:
+            send_mouse_button(e.a, e.b != 0);
+            if (e.a >= 1 && e.a <= 5)
+                gMouseBtn[e.a] = (e.b != 0);
+            overlay_invalidate();
+            pump_messages_nonblocking();
+            break;
+        case EV_KEY_DOWN:
+            send_key(true, (UINT)e.a);
+            update_overlay_state_on_key((UINT)e.a, true);
+            pump_messages_nonblocking();
+            break;
+        case EV_KEY_UP:
+            send_key(false, (UINT)e.a);
+            update_overlay_state_on_key((UINT)e.a, false);
+            pump_messages_nonblocking();
+            break;
+        default:
+            break;
+        }
+    }
+
+    gPlaying = false;
+    stop_all_threads();
+    timeEndPeriod(1);
+
+    if (overlay_ok)
+    {
+        overlay_show(false);
+        destroy_overlay_window();
+        pump_messages_nonblocking();
+    }
+    std::puts("[PLAYFULL] Done.");
     return true;
 }
 
@@ -1895,18 +2049,28 @@ int main(int argc, char **argv)
         std::printf(
             "Usage:\n"
             "  %s record       [file=%s]\n"
+            "                  Records your inputs. No quest walk.\n"
             "  %s play         [file=%s]\n"
+            "                  Replays inputs only. No hunt or quest walk.\n"
+            "  %s full         [file=%s]\n"
+            "                  Records inputs + hunts enemies. No quest walk during recording.\n"
+            "  %s playfull     [file=%s] [marker_th] [deadzone] [tick] [enemy_th] [battle_th] [scan] [cool]\n"
+            "                  Replays macro + hunts enemies + quest walks. The main replay mode.\n"
             "  %s recordhunt  [file] [enemies] [battle] [eTh] [bTh] [scan] [cool]\n"
             "  %s playhunt    [file] [enemies] [battle] [eTh] [bTh] [scan] [cool]\n"
             "  %s questwalk   [marker=%s] [th] [deadzone] [tick] [iL iT iR iB]\n"
             "  %s hunt        [enemies=%s] [battle=%s] [eTh] [bTh] [scan] [cool]\n"
-            "  %s full        [file=%s]\n"
+            "\nTypical workflow:\n"
+            "  1) Recorder.exe full macro.rmac        <- record while hunting\n"
+            "  2) Recorder.exe playfull macro.rmac    <- replay with quest walk + hunt\n"
             "\nDistance: stop at %dm, resume at %dm. OCR uses tessdata\\eng.traineddata\n",
-            argv[0], kDefaultMacroFile, argv[0], kDefaultMacroFile,
+            argv[0], kDefaultMacroFile,
+            argv[0], kDefaultMacroFile,
+            argv[0], kDefaultMacroFile,
+            argv[0], kDefaultMacroFile,
             argv[0], argv[0],
             argv[0], kDefaultQuestPath,
             argv[0], kDefaultEnemyPath, kDefaultBattlePath,
-            argv[0], kDefaultMacroFile,
             kArrivalMeters, kResumeMeters);
         return 0;
     }
@@ -2005,6 +2169,19 @@ int main(int argc, char **argv)
             pump_messages_nonblocking();
         }
         return 0;
+    }
+
+    if (cmd == "playfull")
+    {
+        const char *file = (argc >= 3) ? argv[2] : kDefaultMacroFile;
+        double mth = (argc >= 4) ? std::atof(argv[3]) : gMarkerTh;
+        int dz = (argc >= 5) ? std::atoi(argv[4]) : gDeadzonePx;
+        int tick = (argc >= 6) ? std::atoi(argv[5]) : gQuestTickMs;
+        double eth = (argc >= 7) ? std::atof(argv[6]) : gEnemyTh;
+        double bth = (argc >= 8) ? std::atof(argv[7]) : gBattleTh;
+        int sm = (argc >= 9) ? std::atoi(argv[8]) : gScanMs;
+        int cm = (argc >= 10) ? std::atoi(argv[9]) : gCooldownMs;
+        return play_full(file, mth, dz, tick, eth, bth, sm, cm) ? 0 : 1;
     }
 
     if (cmd == "full")
