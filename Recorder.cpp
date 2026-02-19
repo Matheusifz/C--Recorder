@@ -2008,6 +2008,448 @@ static bool play_full(const char *macroFile,
     return true;
 }
 
+// ========================= Export / Import (text editing) =========================
+
+// Virtual key code to human-readable name
+static const char *vk_name(int vk)
+{
+    switch (vk)
+    {
+    case VK_LBUTTON:
+        return "LBUTTON";
+    case VK_RBUTTON:
+        return "RBUTTON";
+    case VK_MBUTTON:
+        return "MBUTTON";
+    case VK_BACK:
+        return "BACKSPACE";
+    case VK_TAB:
+        return "TAB";
+    case VK_RETURN:
+        return "ENTER";
+    case VK_SHIFT:
+        return "SHIFT";
+    case VK_CONTROL:
+        return "CTRL";
+    case VK_MENU:
+        return "ALT";
+    case VK_PAUSE:
+        return "PAUSE";
+    case VK_CAPITAL:
+        return "CAPSLOCK";
+    case VK_ESCAPE:
+        return "ESCAPE";
+    case VK_SPACE:
+        return "SPACE";
+    case VK_PRIOR:
+        return "PAGEUP";
+    case VK_NEXT:
+        return "PAGEDOWN";
+    case VK_END:
+        return "END";
+    case VK_HOME:
+        return "HOME";
+    case VK_LEFT:
+        return "LEFT";
+    case VK_UP:
+        return "UP";
+    case VK_RIGHT:
+        return "RIGHT";
+    case VK_DOWN:
+        return "DOWN";
+    case VK_INSERT:
+        return "INSERT";
+    case VK_DELETE:
+        return "DELETE";
+    case VK_LWIN:
+        return "LWIN";
+    case VK_RWIN:
+        return "RWIN";
+    case VK_NUMPAD0:
+        return "NUMPAD0";
+    case VK_NUMPAD1:
+        return "NUMPAD1";
+    case VK_NUMPAD2:
+        return "NUMPAD2";
+    case VK_NUMPAD3:
+        return "NUMPAD3";
+    case VK_NUMPAD4:
+        return "NUMPAD4";
+    case VK_NUMPAD5:
+        return "NUMPAD5";
+    case VK_NUMPAD6:
+        return "NUMPAD6";
+    case VK_NUMPAD7:
+        return "NUMPAD7";
+    case VK_NUMPAD8:
+        return "NUMPAD8";
+    case VK_NUMPAD9:
+        return "NUMPAD9";
+    case VK_F1:
+        return "F1";
+    case VK_F2:
+        return "F2";
+    case VK_F3:
+        return "F3";
+    case VK_F4:
+        return "F4";
+    case VK_F5:
+        return "F5";
+    case VK_F6:
+        return "F6";
+    case VK_F7:
+        return "F7";
+    case VK_F8:
+        return "F8";
+    case VK_F9:
+        return "F9";
+    case VK_F10:
+        return "F10";
+    case VK_F11:
+        return "F11";
+    case VK_F12:
+        return "F12";
+    case VK_LSHIFT:
+        return "LSHIFT";
+    case VK_RSHIFT:
+        return "RSHIFT";
+    case VK_LCONTROL:
+        return "LCTRL";
+    case VK_RCONTROL:
+        return "RCTRL";
+    case VK_LMENU:
+        return "LALT";
+    case VK_RMENU:
+        return "RALT";
+    default:
+        // Printable ASCII
+        if (vk >= 0x20 && vk <= 0x7E)
+        {
+            static char buf[2] = {0, 0};
+            buf[0] = (char)vk;
+            return buf;
+        }
+        return "UNKNOWN";
+    }
+}
+
+// Resolve a name back to VK code - handles names from vk_name() above
+static int vk_from_name(const char *name)
+{
+    // Single printable char
+    if (name[0] && !name[1])
+        return (int)(unsigned char)name[0];
+
+    struct
+    {
+        const char *n;
+        int v;
+    } table[] = {
+        {"LBUTTON", VK_LBUTTON}, {"RBUTTON", VK_RBUTTON}, {"MBUTTON", VK_MBUTTON}, {"BACKSPACE", VK_BACK}, {"TAB", VK_TAB}, {"ENTER", VK_RETURN}, {"SHIFT", VK_SHIFT}, {"CTRL", VK_CONTROL}, {"ALT", VK_MENU}, {"PAUSE", VK_PAUSE}, {"CAPSLOCK", VK_CAPITAL}, {"ESCAPE", VK_ESCAPE}, {"SPACE", VK_SPACE}, {"PAGEUP", VK_PRIOR}, {"PAGEDOWN", VK_NEXT}, {"END", VK_END}, {"HOME", VK_HOME}, {"LEFT", VK_LEFT}, {"UP", VK_UP}, {"RIGHT", VK_RIGHT}, {"DOWN", VK_DOWN}, {"INSERT", VK_INSERT}, {"DELETE", VK_DELETE}, {"LWIN", VK_LWIN}, {"RWIN", VK_RWIN}, {"NUMPAD0", VK_NUMPAD0}, {"NUMPAD1", VK_NUMPAD1}, {"NUMPAD2", VK_NUMPAD2}, {"NUMPAD3", VK_NUMPAD3}, {"NUMPAD4", VK_NUMPAD4}, {"NUMPAD5", VK_NUMPAD5}, {"NUMPAD6", VK_NUMPAD6}, {"NUMPAD7", VK_NUMPAD7}, {"NUMPAD8", VK_NUMPAD8}, {"NUMPAD9", VK_NUMPAD9}, {"F1", VK_F1}, {"F2", VK_F2}, {"F3", VK_F3}, {"F4", VK_F4}, {"F5", VK_F5}, {"F6", VK_F6}, {"F7", VK_F7}, {"F8", VK_F8}, {"F9", VK_F9}, {"F10", VK_F10}, {"F11", VK_F11}, {"F12", VK_F12}, {"LSHIFT", VK_LSHIFT}, {"RSHIFT", VK_RSHIFT}, {"LCTRL", VK_LCONTROL}, {"RCTRL", VK_RCONTROL}, {"LALT", VK_LMENU}, {"RALT", VK_RMENU}, {nullptr, 0}};
+    for (int i = 0; table[i].n; ++i)
+        if (_stricmp(name, table[i].n) == 0)
+            return table[i].v;
+
+    // Fallback: try as decimal number
+    return std::atoi(name);
+}
+
+// Export binary .rmac to human-readable text file
+static bool export_macro(const char *rmacPath, const char *txtPath)
+{
+    FILE *in = std::fopen(rmacPath, "rb");
+    if (!in)
+    {
+        std::fprintf(stderr, "Cannot open: %s\n", rmacPath);
+        return false;
+    }
+
+    FileHeader hdr{};
+    if (read_exact(in, &hdr, sizeof(hdr)) != sizeof(hdr) || hdr.magic != 0x524D4143)
+    {
+        std::fprintf(stderr, "Invalid .rmac file: %s\n", rmacPath);
+        std::fclose(in);
+        return false;
+    }
+
+    std::vector<Event> events;
+    Event ev{};
+    while (read_exact(in, &ev, sizeof(ev)) == sizeof(ev))
+        events.push_back(ev);
+    std::fclose(in);
+
+    // Calculate duration
+    double durationS = events.empty() ? 0.0 : events.back().t_us / 1000000.0;
+
+    // Get current time string
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    char timeBuf[64];
+    std::snprintf(timeBuf, sizeof(timeBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    FILE *out = std::fopen(txtPath, "w");
+    if (!out)
+    {
+        std::fprintf(stderr, "Cannot create: %s\n", txtPath);
+        return false;
+    }
+
+    // ---- Header ----
+    std::fprintf(out,
+                 "# RawIO Macro Export\n"
+                 "# Source:    %s\n"
+                 "# Exported:  %s\n"
+                 "# Events:    %zu\n"
+                 "# Duration:  %.3fs\n"
+                 "#\n"
+                 "# ── EVENT TYPES ──────────────────────────────────────────────────────\n"
+                 "#  MOUSE_MOVE    REL vector capture  A=dx  B=dy\n"
+                 "#                Mode: RELATIVE - affected by Windows mouse speed/accel\n"
+                 "#                Tip: disable Enhance Pointer Precision for best accuracy\n"
+                 "#                Tip: set pointer speed to middle notch (6/11)\n"
+                 "#                Tip: hold ALT while recording to switch to ABS (MOUSE_POS)\n"
+                 "#\n"
+                 "#  MOUSE_POS     ABS coordinate      A=x   B=y\n"
+                 "#                Mode: ABSOLUTE - exact screen pixel, always accurate\n"
+                 "#                Recorded when ALT held OR Cursor.png matched\n"
+                 "#\n"
+                 "#  MOUSE_WHEEL   Wheel scroll        A=delta (120=one notch up)\n"
+                 "#  MOUSE_BUTTON  Button event        A=button(1=L,2=R,3=M,4=X1,5=X2) B=1down/0up\n"
+                 "#  KEY_DOWN      Key pressed         A=VK_code or name  (see list below)\n"
+                 "#  KEY_UP        Key released        A=VK_code or name\n"
+                 "#\n"
+                 "# ── EDITING TIPS ──────────────────────────────────────────────────────\n"
+                 "#  - TIME_US is microseconds from start. Keep events in time order.\n"
+                 "#  - To delete an event: delete the entire line\n"
+                 "#  - To fix a camera move: change A (dx) and B (dy) on MOUSE_MOVE lines\n"
+                 "#  - To add a pause: increase TIME_US gap between two events\n"
+                 "#  - To speed up a section: reduce TIME_US values proportionally\n"
+                 "#  - SCALE multiplies ALL MOUSE_MOVE dx/dy values at import time\n"
+                 "#    Use this to correct systematic drift without editing every line\n"
+                 "#    Example: SCALE 0.90 shrinks all movements by 10%%\n"
+                 "#  - Lines starting with # are comments and are ignored on import\n"
+                 "#  - A and B accept either a number or a key name (e.g. SHIFT, F5, W)\n"
+                 "#\n"
+                 "# ── COMMON KEY NAMES ─────────────────────────────────────────────────\n"
+                 "#  W A S D  SPACE  SHIFT  CTRL  ALT  ENTER  ESCAPE  TAB\n"
+                 "#  F1-F12   LEFT RIGHT UP DOWN  PAGEUP PAGEDOWN  HOME END\n"
+                 "#  NUMPAD0-9  LSHIFT RSHIFT  LCTRL RCTRL  LALT RALT\n"
+                 "#\n"
+                 "# SCALE 1.00\n"
+                 "#\n"
+                 "# %-16s %-14s %-7s %-7s %-7s  COMMENT\n"
+                 "# %-16s %-14s %-7s %-7s %-7s\n",
+                 rmacPath, timeBuf, events.size(), durationS,
+                 "TIME_US", "EVENT", "A", "B", "C",
+                 "-------", "-----", "-", "-", "-");
+
+    // ---- Events ----
+    for (const auto &e : events)
+    {
+        const char *evName = "UNKNOWN";
+        char comment[128] = "";
+
+        switch (e.type)
+        {
+        case EV_MOUSE_MOVE:
+            evName = "MOUSE_MOVE";
+            std::snprintf(comment, sizeof(comment), "# REL dx=%d dy=%d", e.a, e.b);
+            break;
+        case EV_MOUSE_POS:
+            evName = "MOUSE_POS";
+            std::snprintf(comment, sizeof(comment), "# ABS x=%d y=%d", e.a, e.b);
+            break;
+        case EV_MOUSE_WHEEL:
+            evName = "MOUSE_WHEEL";
+            std::snprintf(comment, sizeof(comment), "# delta=%d (%s)",
+                          e.a, e.a > 0 ? "up" : "down");
+            break;
+        case EV_MOUSE_BUTTON:
+        {
+            evName = "MOUSE_BUTTON";
+            const char *btnName = (e.a == 1 ? "LEFT" : e.a == 2 ? "RIGHT"
+                                                   : e.a == 3   ? "MIDDLE"
+                                                   : e.a == 4   ? "X1"
+                                                   : e.a == 5   ? "X2"
+                                                                : "?");
+            std::snprintf(comment, sizeof(comment), "# %s %s",
+                          btnName, e.b ? "DOWN" : "UP");
+            break;
+        }
+        case EV_KEY_DOWN:
+            evName = "KEY_DOWN";
+            std::snprintf(comment, sizeof(comment), "# %s", vk_name(e.a));
+            break;
+        case EV_KEY_UP:
+            evName = "KEY_UP";
+            std::snprintf(comment, sizeof(comment), "# %s", vk_name(e.a));
+            break;
+        }
+
+        std::fprintf(out, "%-17llu %-14s %-7d %-7d %-7d  %s\n",
+                     (unsigned long long)e.t_us,
+                     evName, e.a, e.b, e.c, comment);
+    }
+
+    std::fclose(out);
+    std::printf("Exported %zu events to: %s\n", events.size(), txtPath);
+    return true;
+}
+
+// Import text file back to binary .rmac
+static bool import_macro(const char *txtPath, const char *rmacPath)
+{
+    FILE *in = std::fopen(txtPath, "r");
+    if (!in)
+    {
+        std::fprintf(stderr, "Cannot open: %s\n", txtPath);
+        return false;
+    }
+
+    double scale = 1.0;
+    std::vector<Event> events;
+    char line[1024];
+    int lineNum = 0;
+    int skipped = 0;
+
+    while (std::fgets(line, sizeof(line), in))
+    {
+        ++lineNum;
+
+        // Strip leading whitespace
+        char *p = line;
+        while (*p == ' ' || *p == '\t')
+            ++p;
+
+        // Skip empty lines
+        if (*p == '\n' || *p == '\r' || *p == '\0')
+            continue;
+
+        // Check for SCALE directive in comments
+        if (*p == '#')
+        {
+            // Look for "# SCALE 0.95" anywhere in comment lines
+            const char *sc = std::strstr(p, "SCALE");
+            if (sc)
+            {
+                sc += 5;
+                while (*sc == ' ' || *sc == '\t')
+                    ++sc;
+                double s = std::atof(sc);
+                if (s > 0.01 && s < 100.0)
+                {
+                    scale = s;
+                    std::printf("[IMPORT] SCALE = %.4f\n", scale);
+                }
+            }
+            continue;
+        }
+
+        // Parse: TIME_US  EVENT  A  B  C  [# comment...]
+        char evName[32] = {};
+        char aStr[32] = {};
+        char bStr[32] = {};
+        unsigned long long t_us = 0;
+        int b = 0, c = 0;
+
+        int parsed = std::sscanf(p, "%llu %31s %31s %31s %d",
+                                 &t_us, evName, aStr, bStr, &c);
+        if (parsed < 3)
+        {
+            std::fprintf(stderr, "[IMPORT] Line %d: cannot parse, skipping: %s", lineNum, line);
+            ++skipped;
+            continue;
+        }
+
+        // A and B can be a number or a key name
+        int a = std::atoi(aStr);
+        if (a == 0 && aStr[0] != '0')
+            a = vk_from_name(aStr);
+
+        b = (parsed >= 4) ? std::atoi(bStr) : 0;
+        if (b == 0 && parsed >= 4 && bStr[0] != '0')
+            b = vk_from_name(bStr);
+
+        // Resolve event type
+        uint32_t type = 0xFFFFFFFF;
+        if (_stricmp(evName, "MOUSE_MOVE") == 0)
+            type = EV_MOUSE_MOVE;
+        else if (_stricmp(evName, "MOUSE_POS") == 0)
+            type = EV_MOUSE_POS;
+        else if (_stricmp(evName, "MOUSE_WHEEL") == 0)
+            type = EV_MOUSE_WHEEL;
+        else if (_stricmp(evName, "MOUSE_BUTTON") == 0)
+            type = EV_MOUSE_BUTTON;
+        else if (_stricmp(evName, "KEY_DOWN") == 0)
+            type = EV_KEY_DOWN;
+        else if (_stricmp(evName, "KEY_UP") == 0)
+            type = EV_KEY_UP;
+        else
+        {
+            std::fprintf(stderr, "[IMPORT] Line %d: unknown event '%s', skipping.\n", lineNum, evName);
+            ++skipped;
+            continue;
+        }
+
+        // Apply SCALE to MOUSE_MOVE dx/dy
+        if (type == EV_MOUSE_MOVE && std::fabs(scale - 1.0) > 1e-6)
+        {
+            a = (int)std::round(a * scale);
+            b = (int)std::round(b * scale);
+        }
+
+        Event ev{};
+        ev.type = type;
+        ev.t_us = (uint64_t)t_us;
+        ev.a = a;
+        ev.b = b;
+        ev.c = c;
+        events.push_back(ev);
+    }
+    std::fclose(in);
+
+    if (events.empty())
+    {
+        std::fprintf(stderr, "[IMPORT] No valid events found in: %s\n", txtPath);
+        return false;
+    }
+
+    // Sort by time just in case editing reordered lines
+    std::sort(events.begin(), events.end(),
+              [](const Event &x, const Event &y)
+              { return x.t_us < y.t_us; });
+
+    // Write binary .rmac
+    FILE *out = std::fopen(rmacPath, "wb");
+    if (!out)
+    {
+        std::fprintf(stderr, "Cannot create: %s\n", rmacPath);
+        return false;
+    }
+
+    static char fileBuf[1 << 20];
+    setvbuf(out, fileBuf, _IOFBF, sizeof(fileBuf));
+
+    FileHeader hdr{};
+    hdr.magic = 0x524D4143;
+    hdr.version = 1;
+    FILETIME ft{};
+    GetSystemTimeAsFileTime(&ft);
+    hdr.start_utc = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    fwrite(&hdr, sizeof(hdr), 1, out);
+
+    for (const auto &e : events)
+        fwrite(&e, sizeof(e), 1, out);
+
+    fflush(out);
+    std::fclose(out);
+
+    std::printf("[IMPORT] Wrote %zu events to: %s  (skipped %d lines, scale=%.4f)\n",
+                events.size(), rmacPath, skipped, scale);
+    return true;
+}
+
 // ========================= CLI parsing =========================
 
 static void parse_abs_args(int argc, char **argv, int i)
@@ -2060,9 +2502,16 @@ int main(int argc, char **argv)
             "  %s playhunt    [file] [enemies] [battle] [eTh] [bTh] [scan] [cool]\n"
             "  %s questwalk   [marker=%s] [th] [deadzone] [tick] [iL iT iR iB]\n"
             "  %s hunt        [enemies=%s] [battle=%s] [eTh] [bTh] [scan] [cool]\n"
+            "  %s export      <file.rmac> <file.txt>\n"
+            "                  Converts binary macro to editable text file.\n"
+            "  %s import      <file.txt> <file.rmac>\n"
+            "                  Converts edited text file back to binary macro.\n"
             "\nTypical workflow:\n"
-            "  1) Recorder.exe full macro.rmac        <- record while hunting\n"
-            "  2) Recorder.exe playfull macro.rmac    <- replay with quest walk + hunt\n"
+            "  1) Recorder.exe full macro.rmac           <- record while hunting\n"
+            "  2) Recorder.exe export macro.rmac edit.txt <- export to text\n"
+            "  3) Edit edit.txt in Notepad                <- fix camera moves etc\n"
+            "  4) Recorder.exe import edit.txt macro.rmac <- import back\n"
+            "  5) Recorder.exe playfull macro.rmac        <- replay with quest walk + hunt\n"
             "\nDistance: stop at %dm, resume at %dm. OCR uses tessdata\\eng.traineddata\n",
             argv[0], kDefaultMacroFile,
             argv[0], kDefaultMacroFile,
@@ -2071,11 +2520,32 @@ int main(int argc, char **argv)
             argv[0], argv[0],
             argv[0], kDefaultQuestPath,
             argv[0], kDefaultEnemyPath, kDefaultBattlePath,
+            argv[0], argv[0],
             kArrivalMeters, kResumeMeters);
         return 0;
     }
 
     std::string cmd = argv[1];
+
+    if (cmd == "export")
+    {
+        if (argc < 4)
+        {
+            std::fprintf(stderr, "Usage: %s export <file.rmac> <file.txt>\n", argv[0]);
+            return 1;
+        }
+        return export_macro(argv[2], argv[3]) ? 0 : 1;
+    }
+
+    if (cmd == "import")
+    {
+        if (argc < 4)
+        {
+            std::fprintf(stderr, "Usage: %s import <file.txt> <file.rmac>\n", argv[0]);
+            return 1;
+        }
+        return import_macro(argv[2], argv[3]) ? 0 : 1;
+    }
 
     if (cmd == "record")
     {
