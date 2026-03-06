@@ -75,47 +75,47 @@ using namespace cv;
 
 // ========================= Constants =========================
 
-static const char *kSinkClassName    = "RawIO_Sink_Window";
+static const char *kSinkClassName = "RawIO_Sink_Window";
 static const char *kOverlayClassName = "RawIO_Overlay_Window";
 
-static const char *kDefaultMacroFile  = "macro.rmac";
-static const char *kDefaultEnemyPath  = "templates\\Enemies";
+static const char *kDefaultMacroFile = "macro.rmac";
+static const char *kDefaultEnemyPath = "templates\\Enemies";
 static const char *kDefaultBattlePath = "templates\\BattleStart.png";
 static const char *kDefaultCursorPath = "templates\\Cursor.png";
-static const char *kDefaultQuestPath  = "templates\\QuestMarker.png";
+static const char *kDefaultQuestPath = "templates\\QuestMarker.png";
 
 // Quest log icon ignore rectangles (screen pixels)
-static RECT gQuestLogIgnore  = {45,  282, 72,  311};  // quest log icon
-static RECT gQuestLogIgnore2 = {10,  10,  510, 350};  // info overlay window area
+static RECT gQuestLogIgnore = {45, 282, 72, 311};  // quest log icon
+static RECT gQuestLogIgnore2 = {10, 10, 510, 350}; // info overlay window area
 
 // Distance thresholds (meters)
-static const int kArrivalMeters = 2;  // stop when dist <= this
-static const int kResumeMeters  = 5;  // resume when dist >= this after stopping
+static const int kArrivalMeters = 2; // stop when dist <= this
+static const int kResumeMeters = 5;  // resume when dist >= this after stopping
 
 // ========================= Event File Format =========================
 
 enum EventType : uint32_t
 {
-    EV_MOUSE_MOVE   = 0,
-    EV_MOUSE_WHEEL  = 1,
-    EV_KEY_DOWN     = 2,
-    EV_KEY_UP       = 3,
+    EV_MOUSE_MOVE = 0,
+    EV_MOUSE_WHEEL = 1,
+    EV_KEY_DOWN = 2,
+    EV_KEY_UP = 3,
     EV_MOUSE_BUTTON = 4,
-    EV_MOUSE_POS    = 5,
+    EV_MOUSE_POS = 5,
 };
 
 #pragma pack(push, 1)
 struct FileHeader
 {
-    uint32_t magic;     // 'RMAC' = 0x524D4143
-    uint32_t version;   // 1
+    uint32_t magic;   // 'RMAC' = 0x524D4143
+    uint32_t version; // 1
     uint64_t start_utc;
 };
 struct Event
 {
     uint32_t type;
     uint64_t t_us;
-    int32_t  a, b, c;
+    int32_t a, b, c;
 };
 #pragma pack(pop)
 
@@ -124,17 +124,17 @@ struct Event
 static LARGE_INTEGER gFreq{};
 static LARGE_INTEGER gT0{};
 
-static FILE *gOut       = nullptr;
-static bool  gRecording = false;
-static bool  gPlaying   = false;
+static FILE *gOut = nullptr;
+static bool gRecording = false;
+static bool gPlaying = false;
 
-static HWND gSinkHwnd    = nullptr;
+static HWND gSinkHwnd = nullptr;
 static HWND gOverlayHwnd = nullptr;
 
-static LONG  gLastDx = 0, gLastDy = 0;
-static int   gLastWheel = 0;
-static bool  gMouseBtn[6]  = {};
-static bool  gKeyDown[256] = {};
+static LONG gLastDx = 0, gLastDy = 0;
+static int gLastWheel = 0;
+static bool gMouseBtn[6] = {};
+static bool gKeyDown[256] = {};
 static POINT gCursorPt{};
 
 static std::vector<BYTE> gRawBuf;
@@ -144,38 +144,38 @@ static std::vector<BYTE> gRawBuf;
 static std::atomic<bool> gAbsByAlt{false};
 static std::atomic<bool> gAbsByCursor{false};
 static std::atomic<bool> gRunAbsPoll{false};
-static std::thread       gAbsPollThread;
+static std::thread gAbsPollThread;
 static std::atomic<bool> gRunCursorDetect{false};
-static std::thread       gCursorDetectThread;
+static std::thread gCursorDetectThread;
 
 static std::string gAbsCursorTemplatePath = kDefaultCursorPath;
-static double      gCursorTh     = 0.88;
-static int         gCursorScanMs = 33;
-static int         gAbsPollMs    = 2;
-static cv::Mat     gAbsCursorTempl;
-static bool        gCursorMultiScale = true;
+static double gCursorTh = 0.88;
+static int gCursorScanMs = 33;
+static int gAbsPollMs = 2;
+static cv::Mat gAbsCursorTempl;
+static bool gCursorMultiScale = true;
 
 // ========================= Hunt state =========================
 
 static std::atomic<bool> gAutoHuntRun{false};
-static std::thread       gAutoHuntThread;
+static std::thread gAutoHuntThread;
 static std::atomic<bool> gBattleStarted{false};
 
 static std::string gEnemyTemplatesPath = kDefaultEnemyPath;
-static std::string gBattleStartPath    = kDefaultBattlePath;
-static double      gEnemyTh    = 0.75;
-static double      gBattleTh   = 0.88;
-static int         gScanMs     = 200;
-static int         gCooldownMs = 900;
+static std::string gBattleStartPath = kDefaultBattlePath;
+static double gEnemyTh = 0.75;
+static double gBattleTh = 0.88;
+static int gScanMs = 200;
+static int gCooldownMs = 900;
 
 struct HuntInfo
 {
-    std::atomic<int>    detections{0};
-    std::atomic<int>    attacks{0};
-    std::atomic<int>    lastX{-1};
-    std::atomic<int>    lastY{-1};
+    std::atomic<int> detections{0};
+    std::atomic<int> attacks{0};
+    std::atomic<int> lastX{-1};
+    std::atomic<int> lastY{-1};
     std::atomic<double> lastConf{0.0};
-    std::atomic<bool>   lastWasBattle{false};
+    std::atomic<bool> lastWasBattle{false};
 
     mutable std::mutex nameMu;
     char lastName[256]{};
@@ -195,18 +195,18 @@ static HuntInfo gHuntInfo;
 
 // ========================= Quest walk state =========================
 
-static std::atomic<bool>   gRunQuestWalk{false};
-static std::thread         gQuestWalkThread;
-static std::string         gQuestMarkerPath = kDefaultQuestPath;
-static double              gMarkerTh        = 0.60;
-static int                 gDeadzonePx      = 40;
-static int                 gQuestTickMs     = 10;
+static std::atomic<bool> gRunQuestWalk{false};
+static std::thread gQuestWalkThread;
+static std::string gQuestMarkerPath = kDefaultQuestPath;
+static double gMarkerTh = 0.55;
+static int gDeadzonePx = 40;
+static int gQuestTickMs = 10;
 
 // Overlay feedback
-static std::atomic<int>    gQuestMarkerX{-1};
-static std::atomic<int>    gQuestMarkerY{-1};
+static std::atomic<int> gQuestMarkerX{-1};
+static std::atomic<int> gQuestMarkerY{-1};
 static std::atomic<double> gQuestMarkerConf{0.0};
-static std::atomic<int>    gQuestDistanceM{-1};
+static std::atomic<int> gQuestDistanceM{-1};
 
 // ========================= Replay timing =========================
 
@@ -216,11 +216,13 @@ static double gPlaySpeed = 1.0; // multiplier: 1.0 = exact, 1.1 = 10% slower, 0.
 // Much more accurate than sleep_for alone on Windows.
 static void precise_sleep_us(uint64_t us)
 {
-    if (us == 0) return;
+    if (us == 0)
+        return;
 
     // Apply speed multiplier
     us = (uint64_t)(us * gPlaySpeed);
-    if (us == 0) return;
+    if (us == 0)
+        return;
 
     LARGE_INTEGER freq, start, now;
     QueryPerformanceFrequency(&freq);
@@ -232,12 +234,15 @@ static void precise_sleep_us(uint64_t us)
     if (us > 2500)
     {
         uint64_t sleepMs = (us - 2000) / 1000;
-        if (sleepMs > 0) Sleep((DWORD)sleepMs);
+        if (sleepMs > 0)
+            Sleep((DWORD)sleepMs);
     }
 
     // Spin-wait the remainder
-    do { QueryPerformanceCounter(&now); }
-    while ((uint64_t)(now.QuadPart - start.QuadPart) < ticks);
+    do
+    {
+        QueryPerformanceCounter(&now);
+    } while ((uint64_t)(now.QuadPart - start.QuadPart) < ticks);
 }
 
 // ========================= Tesseract OCR =========================
@@ -251,7 +256,9 @@ public:
         if (api_->Init(dataPath, lang) != 0)
         {
             std::fprintf(stderr, "[OCR] Tesseract init failed. tessdata path: %s\n", dataPath);
-            delete api_; api_ = nullptr; return false;
+            delete api_;
+            api_ = nullptr;
+            return false;
         }
         // Only allow digits and 'm' - fastest, cleanest output
         api_->SetVariable("tessedit_char_whitelist", "0123456789m");
@@ -262,13 +269,19 @@ public:
 
     ~TesseractOCR()
     {
-        if (api_) { api_->End(); delete api_; api_ = nullptr; }
+        if (api_)
+        {
+            api_->End();
+            delete api_;
+            api_ = nullptr;
+        }
     }
 
     // Returns distance in meters, -1 on failure
     int readDistance(const cv::Mat &roiBGR)
     {
-        if (!api_ || roiBGR.empty()) return -1;
+        if (!api_ || roiBGR.empty())
+            return -1;
 
         // Preprocess: grayscale -> threshold white-on-dark -> upscale 3x for accuracy
         cv::Mat gray, thresh, scaled;
@@ -293,13 +306,22 @@ public:
             delete[] raw;
             // Strip whitespace
             s.erase(std::remove_if(s.begin(), s.end(),
-                    [](unsigned char c){ return std::isspace(c); }), s.end());
+                                   [](unsigned char c)
+                                   { return std::isspace(c); }),
+                    s.end());
             // Strip trailing 'm'
-            if (!s.empty() && (s.back() == 'm' || s.back() == 'M')) s.pop_back();
+            if (!s.empty() && (s.back() == 'm' || s.back() == 'M'))
+                s.pop_back();
             if (!s.empty())
             {
-                try { dist = std::stoi(s); }
-                catch (...) { dist = -1; }
+                try
+                {
+                    dist = std::stoi(s);
+                }
+                catch (...)
+                {
+                    dist = -1;
+                }
             }
         }
         return dist;
@@ -318,7 +340,12 @@ static void enable_dpi_awareness()
     {
         using Fn = BOOL(WINAPI *)(DPI_AWARENESS_CONTEXT);
         auto f = (Fn)GetProcAddress(u32, "SetProcessDpiAwarenessContext");
-        if (f) { f(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); FreeLibrary(u32); return; }
+        if (f)
+        {
+            f(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            FreeLibrary(u32);
+            return;
+        }
         FreeLibrary(u32);
     }
     SetProcessDPIAware();
@@ -328,7 +355,8 @@ static void enable_dpi_awareness()
 
 static uint64_t now_us_since_start()
 {
-    LARGE_INTEGER t; QueryPerformanceCounter(&t);
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
     long double dt = (long double)(t.QuadPart - gT0.QuadPart) / (long double)gFreq.QuadPart;
     return (uint64_t)(dt * 1000000.0L);
 }
@@ -336,25 +364,43 @@ static uint64_t now_us_since_start()
 static void countdown_3s(const char *msg)
 {
     std::cout << msg << " in 3 seconds...\n";
-    for (int i = 3; i > 0; --i) { std::cout << i << "...\n"; Sleep(1000); }
+    for (int i = 3; i > 0; --i)
+    {
+        std::cout << i << "...\n";
+        Sleep(1000);
+    }
 }
 
 static void write_event(uint32_t type, int32_t a = 0, int32_t b = 0, int32_t c = 0)
 {
-    if (!gOut) return;
-    Event ev{}; ev.type = type; ev.t_us = now_us_since_start();
-    ev.a = a; ev.b = b; ev.c = c;
+    if (!gOut)
+        return;
+    Event ev{};
+    ev.type = type;
+    ev.t_us = now_us_since_start();
+    ev.a = a;
+    ev.b = b;
+    ev.c = c;
     fwrite(&ev, sizeof(ev), 1, gOut); // no fflush - precision
 }
 
-static void flush_events() { if (gOut) fflush(gOut); }
+static void flush_events()
+{
+    if (gOut)
+        fflush(gOut);
+}
 static uint64_t read_exact(FILE *f, void *buf, uint64_t sz)
-{ return (uint64_t)fread(buf, 1, (size_t)sz, f); }
+{
+    return (uint64_t)fread(buf, 1, (size_t)sz, f);
+}
 
 // ========================= Overlay =========================
 
 static void overlay_invalidate()
-{ if (gOverlayHwnd) InvalidateRect(gOverlayHwnd, nullptr, FALSE); }
+{
+    if (gOverlayHwnd)
+        InvalidateRect(gOverlayHwnd, nullptr, FALSE);
+}
 
 // ========================= Ignore Rect Visualizer =========================
 // A separate always-on-top transparent window that draws a red rectangle
@@ -366,17 +412,20 @@ static LRESULT CALLBACK IgnoreRectProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 {
     switch (msg)
     {
-    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
     case WM_PAINT:
     {
-        PAINTSTRUCT ps{}; HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc{}; GetClientRect(hwnd, &rc);
+        PAINTSTRUCT ps{};
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
 
         HBRUSH fillBrush = CreateSolidBrush(RGB(255, 0, 0));
         FrameRect(hdc, &rc, fillBrush);
         DeleteObject(fillBrush);
 
-        RECT inner = { rc.left+1, rc.top+1, rc.right-1, rc.bottom-1 };
+        RECT inner = {rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1};
         HBRUSH innerBrush = CreateSolidBrush(RGB(255, 80, 80));
         FrameRect(hdc, &inner, innerBrush);
         DeleteObject(innerBrush);
@@ -384,7 +433,7 @@ static LRESULT CALLBACK IgnoreRectProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(255, 60, 60));
         HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        HFONT old  = (HFONT)SelectObject(hdc, font);
+        HFONT old = (HFONT)SelectObject(hdc, font);
         const char *label = "IGNORE";
         TextOutA(hdc, 2, 0, label, (int)strlen(label));
         SelectObject(hdc, old);
@@ -392,7 +441,8 @@ static LRESULT CALLBACK IgnoreRectProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         EndPaint(hwnd, &ps);
         return 0;
     }
-    case WM_DESTROY: return 0;
+    case WM_DESTROY:
+        return 0;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
@@ -401,15 +451,18 @@ static HWND make_ignore_zone(const RECT &r, const char *label)
 {
     int x = r.left, y = r.top;
     int w = r.right - r.left, h = r.bottom - r.top;
-    if (w <= 0 || h <= 0) return nullptr;
-    if (r.left==0 && r.right==0 && r.top==0 && r.bottom==0) return nullptr;
+    if (w <= 0 || h <= 0)
+        return nullptr;
+    if (r.left == 0 && r.right == 0 && r.top == 0 && r.bottom == 0)
+        return nullptr;
     DWORD ex = WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT |
                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
     HWND hwnd = CreateWindowExA(ex, "RawIO_IgnoreRect", label,
                                 WS_POPUP, x, y, w, h,
                                 nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
-    if (!hwnd) return nullptr;
-    SetLayeredWindowAttributes(hwnd, RGB(0,0,0), 0, LWA_COLORKEY);
+    if (!hwnd)
+        return nullptr;
+    SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     std::printf("[IGNORE RECT] Red zone at (%d,%d)-(%d,%d)\n", r.left, r.top, r.right, r.bottom);
@@ -422,38 +475,51 @@ static void show_ignore_rect_overlay()
     if (!registered)
     {
         WNDCLASSA wc{};
-        wc.lpfnWndProc   = IgnoreRectProc;
-        wc.hInstance     = GetModuleHandle(nullptr);
+        wc.lpfnWndProc = IgnoreRectProc;
+        wc.hInstance = GetModuleHandle(nullptr);
         wc.lpszClassName = "RawIO_IgnoreRect";
         wc.hbrBackground = (HBRUSH)GetStockObject(NULL_BRUSH);
         RegisterClassA(&wc);
         registered = true;
     }
-    if (gIgnoreRectHwnd) { DestroyWindow(gIgnoreRectHwnd); gIgnoreRectHwnd = nullptr; }
+    if (gIgnoreRectHwnd)
+    {
+        DestroyWindow(gIgnoreRectHwnd);
+        gIgnoreRectHwnd = nullptr;
+    }
     static HWND gIgnoreRectHwnd2 = nullptr;
-    if (gIgnoreRectHwnd2) { DestroyWindow(gIgnoreRectHwnd2); gIgnoreRectHwnd2 = nullptr; }
-    gIgnoreRectHwnd  = make_ignore_zone(gQuestLogIgnore,  "IGNORE");
+    if (gIgnoreRectHwnd2)
+    {
+        DestroyWindow(gIgnoreRectHwnd2);
+        gIgnoreRectHwnd2 = nullptr;
+    }
+    gIgnoreRectHwnd = make_ignore_zone(gQuestLogIgnore, "IGNORE");
     gIgnoreRectHwnd2 = make_ignore_zone(gQuestLogIgnore2, "IGNORE");
 }
-
 
 static BOOL CALLBACK DestroyIgnoreRectWindows(HWND hwnd, LPARAM)
 {
     char cls[64]{};
     GetClassNameA(hwnd, cls, sizeof(cls));
-    if (strcmp(cls, "RawIO_IgnoreRect") == 0) DestroyWindow(hwnd);
+    if (strcmp(cls, "RawIO_IgnoreRect") == 0)
+        DestroyWindow(hwnd);
     return TRUE;
 }
 
 static void hide_ignore_rect_overlay()
 {
-    if (gIgnoreRectHwnd) { DestroyWindow(gIgnoreRectHwnd); gIgnoreRectHwnd = nullptr; }
+    if (gIgnoreRectHwnd)
+    {
+        DestroyWindow(gIgnoreRectHwnd);
+        gIgnoreRectHwnd = nullptr;
+    }
     EnumWindows(DestroyIgnoreRectWindows, 0);
 }
 
 static void overlay_show(bool on)
 {
-    if (!gOverlayHwnd) return;
+    if (!gOverlayHwnd)
+        return;
     if (on)
     {
         ShowWindow(gOverlayHwnd, SW_SHOWNOACTIVATE);
@@ -462,27 +528,34 @@ static void overlay_show(bool on)
         UpdateWindow(gOverlayHwnd);
         overlay_invalidate();
     }
-    else ShowWindow(gOverlayHwnd, SW_HIDE);
+    else
+        ShowWindow(gOverlayHwnd, SW_HIDE);
 }
 
 static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
-    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
     case WM_PAINT:
     {
-        PAINTSTRUCT ps{}; HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc{}; GetClientRect(hwnd, &rc);
+        PAINTSTRUCT ps{};
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
         HBRUSH bg = CreateSolidBrush(RGB(10, 10, 10));
-        FillRect(hdc, &rc, bg); DeleteObject(bg);
+        FillRect(hdc, &rc, bg);
+        DeleteObject(bg);
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(230, 230, 230));
         HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        HFONT old  = (HFONT)SelectObject(hdc, font);
+        HFONT old = (HFONT)SelectObject(hdc, font);
 
-        char line[512]; int y = 8;
-        auto put = [&](const char *s){ TextOutA(hdc, 8, y, s, (int)strlen(s)); y += 18; };
+        char line[512];
+        int y = 8;
+        auto put = [&](const char *s)
+        { TextOutA(hdc, 8, y, s, (int)strlen(s)); y += 18; };
 
         bool absMode = gAbsByAlt.load() || gAbsByCursor.load();
         put(gRecording ? "RawIO [Recording]" : (gPlaying ? "RawIO [Playing]" : "RawIO Overlay"));
@@ -510,7 +583,8 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                  (int)gAutoHuntRun.load(), (int)gBattleStarted.load(), (int)gRunQuestWalk.load());
         put(line);
 
-        char nm[256]; gHuntInfo.getLastName(nm, sizeof(nm));
+        char nm[256];
+        gHuntInfo.getLastName(nm, sizeof(nm));
         snprintf(line, sizeof(line), "HuntDet=%d Atk=%d  Last=%s conf=%.2f",
                  gHuntInfo.detections.load(), gHuntInfo.attacks.load(),
                  nm, gHuntInfo.lastConf.load());
@@ -531,112 +605,169 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         EndPaint(hwnd, &ps);
         return 0;
     }
-    case WM_DESTROY: return 0;
+    case WM_DESTROY:
+        return 0;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 static bool create_overlay_window()
 {
-    WNDCLASSA wc{}; wc.lpfnWndProc = OverlayProc;
-    wc.hInstance = GetModuleHandle(nullptr); wc.lpszClassName = kOverlayClassName;
+    WNDCLASSA wc{};
+    wc.lpfnWndProc = OverlayProc;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = kOverlayClassName;
     if (!RegisterClassA(&wc))
     {
         DWORD e = GetLastError();
         if (e != ERROR_CLASS_ALREADY_EXISTS)
-        { std::fprintf(stderr, "RegisterClassA overlay failed (%lu)\n", e); return false; }
+        {
+            std::fprintf(stderr, "RegisterClassA overlay failed (%lu)\n", e);
+            return false;
+        }
     }
     DWORD ex = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
     gOverlayHwnd = CreateWindowExA(ex, kOverlayClassName, "RawIO Overlay",
                                    WS_POPUP, 10, 10, 500, 340,
                                    nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
     if (!gOverlayHwnd)
-    { std::fprintf(stderr, "CreateWindowExA overlay failed (%lu)\n", GetLastError()); return false; }
+    {
+        std::fprintf(stderr, "CreateWindowExA overlay failed (%lu)\n", GetLastError());
+        return false;
+    }
     SetLayeredWindowAttributes(gOverlayHwnd, 0, 210, LWA_ALPHA);
     ShowWindow(gOverlayHwnd, SW_HIDE);
     return true;
 }
 
 static void destroy_overlay_window()
-{ if (gOverlayHwnd) { DestroyWindow(gOverlayHwnd); gOverlayHwnd = nullptr; } }
+{
+    if (gOverlayHwnd)
+    {
+        DestroyWindow(gOverlayHwnd);
+        gOverlayHwnd = nullptr;
+    }
+}
 
 static void pump_messages_nonblocking()
 {
     MSG msg;
     while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
-    { TranslateMessage(&msg); DispatchMessage(&msg); }
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
 }
 
 // ========================= SendInput helpers =========================
 
 static void send_mouse_move_rel(int dx, int dy)
 {
-    INPUT in{}; in.type = INPUT_MOUSE; in.mi.dx = dx; in.mi.dy = dy;
-    in.mi.dwFlags = MOUSEEVENTF_MOVE; SendInput(1, &in, sizeof(INPUT));
+    INPUT in{};
+    in.type = INPUT_MOUSE;
+    in.mi.dx = dx;
+    in.mi.dy = dy;
+    in.mi.dwFlags = MOUSEEVENTF_MOVE;
+    SendInput(1, &in, sizeof(INPUT));
 }
 
 static void send_mouse_move_abs(int x, int y)
 {
     int vsx = GetSystemMetrics(SM_XVIRTUALSCREEN), vsy = GetSystemMetrics(SM_YVIRTUALSCREEN);
     int vsw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vsh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    if (vsw <= 0 || vsh <= 0) return;
-    double relx = std::clamp((double)(x-vsx)/vsw, 0.0, 1.0);
-    double rely = std::clamp((double)(y-vsy)/vsh, 0.0, 1.0);
-    INPUT in{}; in.type = INPUT_MOUSE;
+    if (vsw <= 0 || vsh <= 0)
+        return;
+    double relx = std::clamp((double)(x - vsx) / vsw, 0.0, 1.0);
+    double rely = std::clamp((double)(y - vsy) / vsh, 0.0, 1.0);
+    INPUT in{};
+    in.type = INPUT_MOUSE;
     in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-    in.mi.dx = (LONG)(relx*65535.0+0.5); in.mi.dy = (LONG)(rely*65535.0+0.5);
+    in.mi.dx = (LONG)(relx * 65535.0 + 0.5);
+    in.mi.dy = (LONG)(rely * 65535.0 + 0.5);
     SendInput(1, &in, sizeof(INPUT));
 }
 
 static void send_mouse_wheel(int delta)
 {
-    INPUT in{}; in.type = INPUT_MOUSE;
-    in.mi.mouseData = (DWORD)delta; in.mi.dwFlags = MOUSEEVENTF_WHEEL;
+    INPUT in{};
+    in.type = INPUT_MOUSE;
+    in.mi.mouseData = (DWORD)delta;
+    in.mi.dwFlags = MOUSEEVENTF_WHEEL;
     SendInput(1, &in, sizeof(INPUT));
 }
 
 static void send_mouse_button(int button, bool down)
 {
-    INPUT in{}; in.type = INPUT_MOUSE;
+    INPUT in{};
+    in.type = INPUT_MOUSE;
     switch (button)
     {
-    case 1: in.mi.dwFlags = down ? MOUSEEVENTF_LEFTDOWN   : MOUSEEVENTF_LEFTUP;   break;
-    case 2: in.mi.dwFlags = down ? MOUSEEVENTF_RIGHTDOWN  : MOUSEEVENTF_RIGHTUP;  break;
-    case 3: in.mi.dwFlags = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP; break;
-    case 4: in.mi.dwFlags = down?MOUSEEVENTF_XDOWN:MOUSEEVENTF_XUP; in.mi.mouseData=XBUTTON1; break;
-    case 5: in.mi.dwFlags = down?MOUSEEVENTF_XDOWN:MOUSEEVENTF_XUP; in.mi.mouseData=XBUTTON2; break;
-    default: return;
+    case 1:
+        in.mi.dwFlags = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+        break;
+    case 2:
+        in.mi.dwFlags = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
+        break;
+    case 3:
+        in.mi.dwFlags = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
+        break;
+    case 4:
+        in.mi.dwFlags = down ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
+        in.mi.mouseData = XBUTTON1;
+        break;
+    case 5:
+        in.mi.dwFlags = down ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
+        in.mi.mouseData = XBUTTON2;
+        break;
+    default:
+        return;
     }
     SendInput(1, &in, sizeof(INPUT));
 }
 
 static void send_key(bool down, UINT vk)
 {
-    INPUT in{}; in.type = INPUT_KEYBOARD;
-    in.ki.wVk = (WORD)vk; in.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = (WORD)vk;
+    in.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
     SendInput(1, &in, sizeof(INPUT));
 }
 
 static void release_move_keys()
 {
-    send_key(false, 'W'); send_key(false, 'A');
-    send_key(false, 'S'); send_key(false, 'D');
+    send_key(false, 'W');
+    send_key(false, 'A');
+    send_key(false, 'S');
+    send_key(false, 'D');
     send_key(false, VK_SHIFT);
 }
 
 // ========================= Raw Input Sink =========================
 
-static void update_overlay_state_on_mouse() { GetCursorPos(&gCursorPt); overlay_invalidate(); }
+static void update_overlay_state_on_mouse()
+{
+    GetCursorPos(&gCursorPt);
+    overlay_invalidate();
+}
 static void update_overlay_state_on_key(UINT vk, bool down)
-{ if (vk < 256) gKeyDown[vk] = down; overlay_invalidate(); }
+{
+    if (vk < 256)
+        gKeyDown[vk] = down;
+    overlay_invalidate();
+}
 
 static bool register_raw(HWND hwnd)
 {
     RAWINPUTDEVICE rids[2]{};
-    rids[0].usUsagePage = 0x01; rids[0].usUsage = 0x02;
-    rids[0].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY; rids[0].hwndTarget = hwnd;
-    rids[1].usUsagePage = 0x01; rids[1].usUsage = 0x06;
-    rids[1].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY; rids[1].hwndTarget = hwnd;
+    rids[0].usUsagePage = 0x01;
+    rids[0].usUsage = 0x02;
+    rids[0].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
+    rids[0].hwndTarget = hwnd;
+    rids[1].usUsagePage = 0x01;
+    rids[1].usUsage = 0x06;
+    rids[1].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
+    rids[1].hwndTarget = hwnd;
     return RegisterRawInputDevices(rids, 2, sizeof(RAWINPUTDEVICE)) == TRUE;
 }
 
@@ -646,13 +777,17 @@ static LRESULT CALLBACK SinkProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     {
     case WM_INPUT:
     {
-        if (!gRecording) break;
+        if (!gRecording)
+            break;
         UINT size = 0;
         GetRawInputData((HRAWINPUT)lParam, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER));
-        if (!size) break;
-        if (gRawBuf.size() < size) gRawBuf.resize(size);
+        if (!size)
+            break;
+        if (gRawBuf.size() < size)
+            gRawBuf.resize(size);
         if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT,
-                            gRawBuf.data(), &size, sizeof(RAWINPUTHEADER)) != size) break;
+                            gRawBuf.data(), &size, sizeof(RAWINPUTHEADER)) != size)
+            break;
 
         RAWINPUT *raw = reinterpret_cast<RAWINPUT *>(gRawBuf.data());
 
@@ -667,8 +802,10 @@ static LRESULT CALLBACK SinkProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 LONG dx = m.lLastX, dy = m.lLastY;
                 if (dx != 0 || dy != 0)
                 {
-                    gLastDx = dx; gLastDy = dy;
-                    if (!absMode) write_event(EV_MOUSE_MOVE, (int32_t)dx, (int32_t)dy, 0);
+                    gLastDx = dx;
+                    gLastDy = dy;
+                    if (!absMode)
+                        write_event(EV_MOUSE_MOVE, (int32_t)dx, (int32_t)dy, 0);
                     update_overlay_state_on_mouse();
                 }
             }
@@ -681,96 +818,163 @@ static LRESULT CALLBACK SinkProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             }
             auto log_btn = [&](int btn, bool down)
             {
-                if (btn >= 1 && btn <= 5) gMouseBtn[btn] = down;
+                if (btn >= 1 && btn <= 5)
+                    gMouseBtn[btn] = down;
                 write_event(EV_MOUSE_BUTTON, (int32_t)btn, down ? 1 : 0, 0);
                 update_overlay_state_on_mouse();
             };
-            if (m.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN)   log_btn(1, true);
-            if (m.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP)     log_btn(1, false);
-            if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN)  log_btn(2, true);
-            if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_UP)    log_btn(2, false);
-            if (m.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN) log_btn(3, true);
-            if (m.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_UP)   log_btn(3, false);
-            if (m.usButtonFlags & RI_MOUSE_BUTTON_4_DOWN)      log_btn(4, true);
-            if (m.usButtonFlags & RI_MOUSE_BUTTON_4_UP)        log_btn(4, false);
-            if (m.usButtonFlags & RI_MOUSE_BUTTON_5_DOWN)      log_btn(5, true);
-            if (m.usButtonFlags & RI_MOUSE_BUTTON_5_UP)        log_btn(5, false);
+            if (m.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN)
+                log_btn(1, true);
+            if (m.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP)
+                log_btn(1, false);
+            if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN)
+                log_btn(2, true);
+            if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_UP)
+                log_btn(2, false);
+            if (m.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN)
+                log_btn(3, true);
+            if (m.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_UP)
+                log_btn(3, false);
+            if (m.usButtonFlags & RI_MOUSE_BUTTON_4_DOWN)
+                log_btn(4, true);
+            if (m.usButtonFlags & RI_MOUSE_BUTTON_4_UP)
+                log_btn(4, false);
+            if (m.usButtonFlags & RI_MOUSE_BUTTON_5_DOWN)
+                log_btn(5, true);
+            if (m.usButtonFlags & RI_MOUSE_BUTTON_5_UP)
+                log_btn(5, false);
         }
         else if (raw->header.dwType == RIM_TYPEKEYBOARD)
         {
             const RAWKEYBOARD &kb = raw->data.keyboard;
             bool isBreak = (kb.Flags & RI_KEY_BREAK) != 0;
             UINT vk = kb.VKey;
-            if (vk == 255) break;
+            if (vk == 255)
+                break;
             gAbsByAlt = ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
-            if (!isBreak && vk == VK_ESCAPE) { PostMessage(hwnd, WM_CLOSE, 0, 0); break; }
-            if (isBreak) { write_event(EV_KEY_UP,   (int32_t)vk, 0, 0); update_overlay_state_on_key(vk, false); }
-            else         { write_event(EV_KEY_DOWN,  (int32_t)vk, 0, 0); update_overlay_state_on_key(vk, true);  }
+            if (!isBreak && vk == VK_ESCAPE)
+            {
+                PostMessage(hwnd, WM_CLOSE, 0, 0);
+                break;
+            }
+            if (isBreak)
+            {
+                write_event(EV_KEY_UP, (int32_t)vk, 0, 0);
+                update_overlay_state_on_key(vk, false);
+            }
+            else
+            {
+                write_event(EV_KEY_DOWN, (int32_t)vk, 0, 0);
+                update_overlay_state_on_key(vk, true);
+            }
         }
         break;
     }
-    case WM_CLOSE:   DestroyWindow(hwnd); return 0;
-    case WM_DESTROY: PostQuitMessage(0);  return 0;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 static bool create_sink_window()
 {
-    WNDCLASSA wc{}; wc.lpfnWndProc = SinkProc;
-    wc.hInstance = GetModuleHandle(nullptr); wc.lpszClassName = kSinkClassName;
+    WNDCLASSA wc{};
+    wc.lpfnWndProc = SinkProc;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = kSinkClassName;
     if (!RegisterClassA(&wc))
     {
         DWORD e = GetLastError();
         if (e != ERROR_CLASS_ALREADY_EXISTS)
-        { std::fprintf(stderr, "RegisterClassA sink failed (%lu)\n", e); return false; }
+        {
+            std::fprintf(stderr, "RegisterClassA sink failed (%lu)\n", e);
+            return false;
+        }
     }
     gSinkHwnd = CreateWindowExA(0, kSinkClassName, "RawIO_Sink",
-                                 WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 100, 100,
-                                 nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+                                WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 100, 100,
+                                nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
     if (!gSinkHwnd)
-    { std::fprintf(stderr, "CreateWindowExA sink failed (%lu)\n", GetLastError()); return false; }
+    {
+        std::fprintf(stderr, "CreateWindowExA sink failed (%lu)\n", GetLastError());
+        return false;
+    }
     ShowWindow(gSinkHwnd, SW_HIDE);
     if (!register_raw(gSinkHwnd))
-    { std::fprintf(stderr, "RegisterRawInputDevices failed (%lu)\n", GetLastError()); return false; }
+    {
+        std::fprintf(stderr, "RegisterRawInputDevices failed (%lu)\n", GetLastError());
+        return false;
+    }
     return true;
 }
 
 static void destroy_sink_window()
-{ if (gSinkHwnd) { DestroyWindow(gSinkHwnd); gSinkHwnd = nullptr; } }
+{
+    if (gSinkHwnd)
+    {
+        DestroyWindow(gSinkHwnd);
+        gSinkHwnd = nullptr;
+    }
+}
 
 // ========================= Screen Capture =========================
 
 static cv::Mat capture_screen_full()
 {
-    const int vx=GetSystemMetrics(SM_XVIRTUALSCREEN), vy=GetSystemMetrics(SM_YVIRTUALSCREEN);
-    const int vw=GetSystemMetrics(SM_CXVIRTUALSCREEN), vh=GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    HDC hScreen=GetDC(NULL), hDC=CreateCompatibleDC(hScreen);
-    HBITMAP hBmp=CreateCompatibleBitmap(hScreen,vw,vh);
-    HGDIOBJ old=SelectObject(hDC,hBmp);
-    BitBlt(hDC,0,0,vw,vh,hScreen,vx,vy,SRCCOPY|CAPTUREBLT);
-    BITMAPINFOHEADER bi{}; bi.biSize=sizeof(bi); bi.biWidth=vw; bi.biHeight=-vh;
-    bi.biPlanes=1; bi.biBitCount=32; bi.biCompression=BI_RGB;
-    cv::Mat bgra(vh,vw,CV_8UC4);
-    GetDIBits(hDC,hBmp,0,vh,bgra.data,(BITMAPINFO*)&bi,DIB_RGB_COLORS);
-    SelectObject(hDC,old); DeleteObject(hBmp); DeleteDC(hDC); ReleaseDC(NULL,hScreen);
-    cv::Mat bgr; cv::cvtColor(bgra,bgr,cv::COLOR_BGRA2BGR); return bgr;
+    const int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    HDC hScreen = GetDC(NULL), hDC = CreateCompatibleDC(hScreen);
+    HBITMAP hBmp = CreateCompatibleBitmap(hScreen, vw, vh);
+    HGDIOBJ old = SelectObject(hDC, hBmp);
+    BitBlt(hDC, 0, 0, vw, vh, hScreen, vx, vy, SRCCOPY | CAPTUREBLT);
+    BITMAPINFOHEADER bi{};
+    bi.biSize = sizeof(bi);
+    bi.biWidth = vw;
+    bi.biHeight = -vh;
+    bi.biPlanes = 1;
+    bi.biBitCount = 32;
+    bi.biCompression = BI_RGB;
+    cv::Mat bgra(vh, vw, CV_8UC4);
+    GetDIBits(hDC, hBmp, 0, vh, bgra.data, (BITMAPINFO *)&bi, DIB_RGB_COLORS);
+    SelectObject(hDC, old);
+    DeleteObject(hBmp);
+    DeleteDC(hDC);
+    ReleaseDC(NULL, hScreen);
+    cv::Mat bgr;
+    cv::cvtColor(bgra, bgr, cv::COLOR_BGRA2BGR);
+    return bgr;
 }
 
 static cv::Mat capture_roi_around_cursor(int halfSize)
 {
-    POINT pt{}; if (!GetCursorPos(&pt)) return cv::Mat();
-    int w=halfSize*2, h=halfSize*2, x0=pt.x-halfSize, y0=pt.y-halfSize;
-    HDC hScreen=GetDC(NULL), hDC=CreateCompatibleDC(hScreen);
-    HBITMAP hBmp=CreateCompatibleBitmap(hScreen,w,h);
-    HGDIOBJ old=SelectObject(hDC,hBmp);
-    BitBlt(hDC,0,0,w,h,hScreen,x0,y0,SRCCOPY|CAPTUREBLT);
-    BITMAPINFOHEADER bi{}; bi.biSize=sizeof(bi); bi.biWidth=w; bi.biHeight=-h;
-    bi.biPlanes=1; bi.biBitCount=32; bi.biCompression=BI_RGB;
-    cv::Mat bgra(h,w,CV_8UC4);
-    GetDIBits(hDC,hBmp,0,h,bgra.data,(BITMAPINFO*)&bi,DIB_RGB_COLORS);
-    SelectObject(hDC,old); DeleteObject(hBmp); DeleteDC(hDC); ReleaseDC(NULL,hScreen);
-    cv::Mat bgr; cv::cvtColor(bgra,bgr,cv::COLOR_BGRA2BGR); return bgr;
+    POINT pt{};
+    if (!GetCursorPos(&pt))
+        return cv::Mat();
+    int w = halfSize * 2, h = halfSize * 2, x0 = pt.x - halfSize, y0 = pt.y - halfSize;
+    HDC hScreen = GetDC(NULL), hDC = CreateCompatibleDC(hScreen);
+    HBITMAP hBmp = CreateCompatibleBitmap(hScreen, w, h);
+    HGDIOBJ old = SelectObject(hDC, hBmp);
+    BitBlt(hDC, 0, 0, w, h, hScreen, x0, y0, SRCCOPY | CAPTUREBLT);
+    BITMAPINFOHEADER bi{};
+    bi.biSize = sizeof(bi);
+    bi.biWidth = w;
+    bi.biHeight = -h;
+    bi.biPlanes = 1;
+    bi.biBitCount = 32;
+    bi.biCompression = BI_RGB;
+    cv::Mat bgra(h, w, CV_8UC4);
+    GetDIBits(hDC, hBmp, 0, h, bgra.data, (BITMAPINFO *)&bi, DIB_RGB_COLORS);
+    SelectObject(hDC, old);
+    DeleteObject(hBmp);
+    DeleteDC(hDC);
+    ReleaseDC(NULL, hScreen);
+    cv::Mat bgr;
+    cv::cvtColor(bgra, bgr, cv::COLOR_BGRA2BGR);
+    return bgr;
 }
 
 // Crop the distance label area below a detected quest marker
@@ -793,14 +997,24 @@ class TemplateDetector
 public:
     bool loadEnemyTemplates(const std::string &path)
     {
-        enemies_.clear(); enemyNames_.clear();
+        enemies_.clear();
+        enemyNames_.clear();
         DWORD attr = GetFileAttributesA(path.c_str());
         if (attr == INVALID_FILE_ATTRIBUTES)
-        { std::fprintf(stderr, "Enemy path not found: %s\n", path.c_str()); return false; }
-        if (attr & FILE_ATTRIBUTE_DIRECTORY) return loadFolder(path);
+        {
+            std::fprintf(stderr, "Enemy path not found: %s\n", path.c_str());
+            return false;
+        }
+        if (attr & FILE_ATTRIBUTE_DIRECTORY)
+            return loadFolder(path);
         Mat img = imread(path, IMREAD_COLOR);
-        if (img.empty()) { std::fprintf(stderr, "Failed to load: %s\n", path.c_str()); return false; }
-        enemies_.push_back(img); enemyNames_.push_back(path);
+        if (img.empty())
+        {
+            std::fprintf(stderr, "Failed to load: %s\n", path.c_str());
+            return false;
+        }
+        enemies_.push_back(img);
+        enemyNames_.push_back(path);
         std::printf("Loaded enemy: %s (%dx%d)\n", path.c_str(), img.cols, img.rows);
         return true;
     }
@@ -808,54 +1022,85 @@ public:
     bool loadBattleStartTemplate(const std::string &file)
     {
         battle_ = imread(file, IMREAD_COLOR);
-        if (battle_.empty()) { std::fprintf(stderr, "Failed to load battle: %s\n", file.c_str()); return false; }
+        if (battle_.empty())
+        {
+            std::fprintf(stderr, "Failed to load battle: %s\n", file.c_str());
+            return false;
+        }
         std::printf("Loaded battle-start: %dx%d\n", battle_.cols, battle_.rows);
         return true;
     }
 
-    void setEnemyThreshold(double t)  { enemyTh_  = t; }
+    void setEnemyThreshold(double t) { enemyTh_ = t; }
     void setBattleThreshold(double t) { battleTh_ = t; }
 
     bool isBattleStart(const Mat &screen, double *outConf = nullptr) const
     {
-        if (battle_.empty() || battle_.cols > screen.cols || battle_.rows > screen.rows) return false;
-        Mat result; matchTemplate(screen, battle_, result, TM_CCOEFF_NORMED);
-        double minVal=0, maxVal=0; Point minLoc, maxLoc;
+        if (battle_.empty() || battle_.cols > screen.cols || battle_.rows > screen.rows)
+            return false;
+        Mat result;
+        matchTemplate(screen, battle_, result, TM_CCOEFF_NORMED);
+        double minVal = 0, maxVal = 0;
+        Point minLoc, maxLoc;
         minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
-        if (outConf) *outConf = maxVal;
+        if (outConf)
+            *outConf = maxVal;
         return maxVal >= battleTh_;
     }
 
     Point findEnemy(const Mat &screen, double *outConf = nullptr, int *outIdx = nullptr) const
     {
-        if (enemies_.empty()) { if (outConf) *outConf=0; if (outIdx) *outIdx=-1; return Point(-1,-1); }
-        double bestScore = -1; Point bestLoc(-1,-1); int bestIdx = -1;
+        if (enemies_.empty())
+        {
+            if (outConf)
+                *outConf = 0;
+            if (outIdx)
+                *outIdx = -1;
+            return Point(-1, -1);
+        }
+        double bestScore = -1;
+        Point bestLoc(-1, -1);
+        int bestIdx = -1;
         for (int i = 0; i < (int)enemies_.size(); ++i)
         {
             const Mat &t = enemies_[i];
-            if (t.cols > screen.cols || t.rows > screen.rows) continue;
-            Mat result; matchTemplate(screen, t, result, TM_CCOEFF_NORMED);
-            double minVal=0, maxVal=0; Point minLoc, maxLoc;
+            if (t.cols > screen.cols || t.rows > screen.rows)
+                continue;
+            Mat result;
+            matchTemplate(screen, t, result, TM_CCOEFF_NORMED);
+            double minVal = 0, maxVal = 0;
+            Point minLoc, maxLoc;
             minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
-            if (maxVal > bestScore) { bestScore=maxVal; bestLoc=maxLoc; bestIdx=i; }
+            if (maxVal > bestScore)
+            {
+                bestScore = maxVal;
+                bestLoc = maxLoc;
+                bestIdx = i;
+            }
         }
-        if (outConf) *outConf = bestScore;
-        if (outIdx)  *outIdx  = bestIdx;
+        if (outConf)
+            *outConf = bestScore;
+        if (outIdx)
+            *outIdx = bestIdx;
         if (bestIdx >= 0 && bestScore >= enemyTh_)
-            return Point(bestLoc.x+enemies_[bestIdx].cols/2, bestLoc.y+enemies_[bestIdx].rows/2);
-        return Point(-1,-1);
+            return Point(bestLoc.x + enemies_[bestIdx].cols / 2, bestLoc.y + enemies_[bestIdx].rows / 2);
+        return Point(-1, -1);
     }
 
     const char *enemyName(int idx) const
-    { return (idx>=0&&idx<(int)enemyNames_.size()) ? enemyNames_[idx].c_str() : ""; }
-
-    static void moveCursorTowards(const Point &target, int steps=18, int stepMs=6)
     {
-        POINT pt{}; GetCursorPos(&pt); Point cur(pt.x, pt.y);
+        return (idx >= 0 && idx < (int)enemyNames_.size()) ? enemyNames_[idx].c_str() : "";
+    }
+
+    static void moveCursorTowards(const Point &target, int steps = 18, int stepMs = 6)
+    {
+        POINT pt{};
+        GetCursorPos(&pt);
+        Point cur(pt.x, pt.y);
         for (int i = 1; i <= steps; ++i)
         {
-            double t = (double)i/steps;
-            SetCursorPos((int)(cur.x+(target.x-cur.x)*t),(int)(cur.y+(target.y-cur.y)*t));
+            double t = (double)i / steps;
+            SetCursorPos((int)(cur.x + (target.x - cur.x) * t), (int)(cur.y + (target.y - cur.y) * t));
             std::this_thread::sleep_for(std::chrono::milliseconds(stepMs));
         }
     }
@@ -864,38 +1109,53 @@ private:
     static bool has_image_ext(const std::string &name)
     {
         std::string s = name;
-        for (char &c : s) c = (char)tolower((unsigned char)c);
-        return (s.size()>=4&&(s.rfind(".png")==s.size()-4||s.rfind(".jpg")==s.size()-4||
-                               s.rfind(".bmp")==s.size()-4))||
-               (s.size()>=5&&s.rfind(".jpeg")==s.size()-5);
+        for (char &c : s)
+            c = (char)tolower((unsigned char)c);
+        return (s.size() >= 4 && (s.rfind(".png") == s.size() - 4 || s.rfind(".jpg") == s.size() - 4 ||
+                                  s.rfind(".bmp") == s.size() - 4)) ||
+               (s.size() >= 5 && s.rfind(".jpeg") == s.size() - 5);
     }
 
     bool loadFolder(const std::string &folder)
     {
-        WIN32_FIND_DATAA data{}; std::string search = folder + "\\*.*";
+        WIN32_FIND_DATAA data{};
+        std::string search = folder + "\\*.*";
         HANDLE h = FindFirstFileA(search.c_str(), &data);
         if (h == INVALID_HANDLE_VALUE)
-        { std::fprintf(stderr, "Cannot open folder: %s\n", folder.c_str()); return false; }
+        {
+            std::fprintf(stderr, "Cannot open folder: %s\n", folder.c_str());
+            return false;
+        }
         int count = 0;
-        do {
+        do
+        {
             std::string name = data.cFileName;
-            if (name=="."||name=="..") continue;
-            if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-            if (!has_image_ext(name)) continue;
-            std::string full = folder+"\\"+name;
+            if (name == "." || name == "..")
+                continue;
+            if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                continue;
+            if (!has_image_ext(name))
+                continue;
+            std::string full = folder + "\\" + name;
             Mat img = imread(full, IMREAD_COLOR);
-            if (img.empty()) { std::fprintf(stderr,"Failed: %s\n",full.c_str()); continue; }
-            enemies_.push_back(img); enemyNames_.push_back(name); ++count;
+            if (img.empty())
+            {
+                std::fprintf(stderr, "Failed: %s\n", full.c_str());
+                continue;
+            }
+            enemies_.push_back(img);
+            enemyNames_.push_back(name);
+            ++count;
         } while (FindNextFileA(h, &data));
         FindClose(h);
         std::printf("Loaded %d enemy templates from: %s\n", count, folder.c_str());
         return count > 0;
     }
 
-    std::vector<Mat>         enemies_;
+    std::vector<Mat> enemies_;
     std::vector<std::string> enemyNames_;
-    Mat    battle_;
-    double enemyTh_  = 0.75;
+    Mat battle_;
+    double enemyTh_ = 0.75;
     double battleTh_ = 0.88;
 };
 
@@ -905,10 +1165,14 @@ static TemplateDetector gDet;
 
 static bool load_abs_cursor_template(const std::string &path)
 {
-    if (path.empty()) return false;
+    if (path.empty())
+        return false;
     gAbsCursorTempl = cv::imread(path, cv::IMREAD_COLOR);
     if (gAbsCursorTempl.empty())
-    { std::fprintf(stderr,"[ABS] Failed cursor template: %s\n",path.c_str()); return false; }
+    {
+        std::fprintf(stderr, "[ABS] Failed cursor template: %s\n", path.c_str());
+        return false;
+    }
     std::printf("[ABS] Loaded cursor template: %s (%dx%d)\n",
                 path.c_str(), gAbsCursorTempl.cols, gAbsCursorTempl.rows);
     return true;
@@ -921,23 +1185,32 @@ static double best_match_score_multiscale(const cv::Mat &roi, const cv::Mat &tem
     for (double s : scales)
     {
         cv::Mat tScaled;
-        if (std::fabs(s-1.0)<1e-6) tScaled = templ;
-        else cv::resize(templ, tScaled, cv::Size(), s, s, cv::INTER_LINEAR);
-        if (tScaled.empty()||tScaled.cols>roi.cols||tScaled.rows>roi.rows) continue;
-        cv::Mat result; cv::matchTemplate(roi, tScaled, result, cv::TM_CCOEFF_NORMED);
-        double minV=0, maxV=0; cv::Point mL, xL; cv::minMaxLoc(result,&minV,&maxV,&mL,&xL);
-        if (maxV > best) best = maxV;
+        if (std::fabs(s - 1.0) < 1e-6)
+            tScaled = templ;
+        else
+            cv::resize(templ, tScaled, cv::Size(), s, s, cv::INTER_LINEAR);
+        if (tScaled.empty() || tScaled.cols > roi.cols || tScaled.rows > roi.rows)
+            continue;
+        cv::Mat result;
+        cv::matchTemplate(roi, tScaled, result, cv::TM_CCOEFF_NORMED);
+        double minV = 0, maxV = 0;
+        cv::Point mL, xL;
+        cv::minMaxLoc(result, &minV, &maxV, &mL, &xL);
+        if (maxV > best)
+            best = maxV;
     }
     return best;
 }
 
 static void start_cursor_detect_thread()
 {
-    if (gAbsCursorTemplatePath.empty()) return;
-    if (!load_abs_cursor_template(gAbsCursorTemplatePath)) return;
+    if (gAbsCursorTemplatePath.empty())
+        return;
+    if (!load_abs_cursor_template(gAbsCursorTemplatePath))
+        return;
     gRunCursorDetect = true;
     gCursorDetectThread = std::thread([]()
-    {
+                                      {
         while (gRunCursorDetect)
         {
             if (!gRecording && !gPlaying) { gAbsByCursor = false; Sleep(50); continue; }
@@ -954,18 +1227,22 @@ static void start_cursor_detect_thread()
             gAbsByCursor = (score >= gCursorTh);
             Sleep(gCursorScanMs);
         }
-        gAbsByCursor = false;
-    });
+        gAbsByCursor = false; });
 }
 
 static void stop_cursor_detect_thread()
-{ gRunCursorDetect=false; if(gCursorDetectThread.joinable()) gCursorDetectThread.join(); gAbsByCursor=false; }
+{
+    gRunCursorDetect = false;
+    if (gCursorDetectThread.joinable())
+        gCursorDetectThread.join();
+    gAbsByCursor = false;
+}
 
 static void start_abs_poll_thread()
 {
     gRunAbsPoll = true;
     gAbsPollThread = std::thread([]()
-    {
+                                 {
         POINT last{-999999, -999999};
         while (gRunAbsPoll)
         {
@@ -983,34 +1260,47 @@ static void start_abs_poll_thread()
             else { POINT pt{}; if(GetCursorPos(&pt)) gCursorPt=pt; }
             gAbsByAlt = ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
             Sleep(gAbsPollMs);
-        }
-    });
+        } });
 }
 
 static void stop_abs_poll_thread()
-{ gRunAbsPoll=false; if(gAbsPollThread.joinable()) gAbsPollThread.join(); }
+{
+    gRunAbsPoll = false;
+    if (gAbsPollThread.joinable())
+        gAbsPollThread.join();
+}
 
 // ========================= Quest Marker Detection =========================
 
 static bool point_in_rect(int x, int y, const RECT &r)
-{ return x>=r.left && x<=r.right && y>=r.top && y<=r.bottom; }
+{
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
 
-struct MatchHit { cv::Point topLeft; double score; };
+struct MatchHit
+{
+    cv::Point topLeft;
+    double score;
+};
 
 static std::vector<MatchHit> find_all_matches(const cv::Mat &screen, const cv::Mat &templ, double th)
 {
     std::vector<MatchHit> hits;
-    if (screen.empty()||templ.empty()||templ.cols>screen.cols||templ.rows>screen.rows) return hits;
-    cv::Mat result; cv::matchTemplate(screen, templ, result, cv::TM_CCOEFF_NORMED);
+    if (screen.empty() || templ.empty() || templ.cols > screen.cols || templ.rows > screen.rows)
+        return hits;
+    cv::Mat result;
+    cv::matchTemplate(screen, templ, result, cv::TM_CCOEFF_NORMED);
     while (true)
     {
-        double minV=0,maxV=0; cv::Point minL,maxL;
-        cv::minMaxLoc(result,&minV,&maxV,&minL,&maxL);
-        if (maxV < th) break;
+        double minV = 0, maxV = 0;
+        cv::Point minL, maxL;
+        cv::minMaxLoc(result, &minV, &maxV, &minL, &maxL);
+        if (maxV < th)
+            break;
         hits.push_back({maxL, maxV});
-        int x0=std::max(0,maxL.x-templ.cols/2), y0=std::max(0,maxL.y-templ.rows/2);
-        int x1=std::min(result.cols,maxL.x+templ.cols/2), y1=std::min(result.rows,maxL.y+templ.rows/2);
-        cv::rectangle(result, cv::Rect(x0,y0,x1-x0,y1-y0), cv::Scalar(0), cv::FILLED);
+        int x0 = std::max(0, maxL.x - templ.cols / 2), y0 = std::max(0, maxL.y - templ.rows / 2);
+        int x1 = std::min(result.cols, maxL.x + templ.cols / 2), y1 = std::min(result.rows, maxL.y + templ.rows / 2);
+        cv::rectangle(result, cv::Rect(x0, y0, x1 - x0, y1 - y0), cv::Scalar(0), cv::FILLED);
     }
     return hits;
 }
@@ -1031,59 +1321,76 @@ static bool pick_world_marker(const cv::Mat &screen, const cv::Mat &questTempl, 
         // Draw ignore zones in red
         auto drawRect = [&](const RECT &r, cv::Scalar color, const char *label)
         {
-            if (r.left==0&&r.right==0&&r.top==0&&r.bottom==0) return;
-            cv::rectangle(dbg, cv::Point(r.left,r.top), cv::Point(r.right,r.bottom), color, 2);
-            cv::putText(dbg, label, cv::Point(r.left+2, r.top+14),
+            if (r.left == 0 && r.right == 0 && r.top == 0 && r.bottom == 0)
+                return;
+            cv::rectangle(dbg, cv::Point(r.left, r.top), cv::Point(r.right, r.bottom), color, 2);
+            cv::putText(dbg, label, cv::Point(r.left + 2, r.top + 14),
                         cv::FONT_HERSHEY_SIMPLEX, 0.5, color, 1);
         };
-        drawRect(gQuestLogIgnore,  cv::Scalar(0,0,255),   "IGNORE1");
-        drawRect(gQuestLogIgnore2, cv::Scalar(0,100,255), "IGNORE2");
+        drawRect(gQuestLogIgnore, cv::Scalar(0, 0, 255), "IGNORE1");
+        drawRect(gQuestLogIgnore2, cv::Scalar(0, 100, 255), "IGNORE2");
 
         // Draw all hits: green = accepted, red = ignored
         for (auto &h : hits)
         {
-            int cx = h.topLeft.x + questTempl.cols/2;
-            int cy = h.topLeft.y + questTempl.rows/2;
-            bool ignored = point_in_rect(cx,cy,gQuestLogIgnore) || point_in_rect(cx,cy,gQuestLogIgnore2);
-            cv::Scalar col = ignored ? cv::Scalar(0,0,200) : cv::Scalar(0,200,0);
+            int cx = h.topLeft.x + questTempl.cols / 2;
+            int cy = h.topLeft.y + questTempl.rows / 2;
+            bool ignored = point_in_rect(cx, cy, gQuestLogIgnore) || point_in_rect(cx, cy, gQuestLogIgnore2);
+            cv::Scalar col = ignored ? cv::Scalar(0, 0, 200) : cv::Scalar(0, 200, 0);
             cv::rectangle(dbg,
-                cv::Point(h.topLeft.x, h.topLeft.y),
-                cv::Point(h.topLeft.x+questTempl.cols, h.topLeft.y+questTempl.rows),
-                col, 2);
-            char buf[32]; std::snprintf(buf,sizeof(buf),"%.2f%s",h.score,ignored?" IGN":"");
-            cv::putText(dbg, buf, cv::Point(h.topLeft.x, h.topLeft.y-4),
+                          cv::Point(h.topLeft.x, h.topLeft.y),
+                          cv::Point(h.topLeft.x + questTempl.cols, h.topLeft.y + questTempl.rows),
+                          col, 2);
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.2f%s", h.score, ignored ? " IGN" : "");
+            cv::putText(dbg, buf, cv::Point(h.topLeft.x, h.topLeft.y - 4),
                         cv::FONT_HERSHEY_SIMPLEX, 0.45, col, 1);
         }
 
         // Draw screen center crosshair
-        int scx=screen.cols/2, scy=screen.rows/2;
-        cv::drawMarker(dbg, cv::Point(scx,scy), cv::Scalar(255,255,0),
+        int scx = screen.cols / 2, scy = screen.rows / 2;
+        cv::drawMarker(dbg, cv::Point(scx, scy), cv::Scalar(255, 255, 0),
                        cv::MARKER_CROSS, 30, 2);
 
         cv::imwrite("quest_debug.png", dbg);
         std::printf("[DEBUG] Saved quest_debug.png  hits=%zu threshold=%.2f\n", hits.size(), th);
     }
 
-    if (hits.empty()) return false;
-    bool found=false; double bestScore=0;
-    cv::Point bestCenter(-1,-1);
+    if (hits.empty())
+        return false;
+    bool found = false;
+    double bestScore = 0;
+    cv::Point bestCenter(-1, -1);
     for (auto &h : hits)
     {
-        int cx=h.topLeft.x+questTempl.cols/2, cy=h.topLeft.y+questTempl.rows/2;
-        if (point_in_rect(cx, cy, gQuestLogIgnore))  continue;
-        if (point_in_rect(cx, cy, gQuestLogIgnore2)) continue;
+        int cx = h.topLeft.x + questTempl.cols / 2, cy = h.topLeft.y + questTempl.rows / 2;
+        if (point_in_rect(cx, cy, gQuestLogIgnore))
+            continue;
+        if (point_in_rect(cx, cy, gQuestLogIgnore2))
+            continue;
         // Pick highest confidence match - don't bias toward screen center
         if (!found || h.score > bestScore)
-        { found=true; bestScore=h.score; bestCenter=cv::Point(cx,cy); }
+        {
+            found = true;
+            bestScore = h.score;
+            bestCenter = cv::Point(cx, cy);
+        }
     }
-    if (!found) return false;
-    outCenter=bestCenter; outScore=bestScore; return true;
+    if (!found)
+        return false;
+    outCenter = bestCenter;
+    outScore = bestScore;
+    return true;
 }
 
 // ========================= Quest Walk Thread =========================
 
 static void stop_quest_walk()
-{ gRunQuestWalk=false; if(gQuestWalkThread.joinable()) gQuestWalkThread.join(); }
+{
+    gRunQuestWalk = false;
+    if (gQuestWalkThread.joinable())
+        gQuestWalkThread.join();
+}
 
 static void start_quest_walk(const cv::Mat &questTempl, double markerTh, int deadzonePx, int tickMs)
 {
@@ -1091,7 +1398,7 @@ static void start_quest_walk(const cv::Mat &questTempl, double markerTh, int dea
     gRunQuestWalk = true;
 
     gQuestWalkThread = std::thread([questTempl, markerTh, deadzonePx, tickMs]()
-    {
+                                   {
         std::puts("[QUEST] Thread started. ESC to stop.");
 
         // Tesseract lives on this thread only
@@ -1237,22 +1544,28 @@ static void start_quest_walk(const cv::Mat &questTempl, double markerTh, int dea
 
         release_move_keys();
         gQuestMarkerX = gQuestMarkerY = -1; gQuestDistanceM = -1;
-        std::puts("[QUEST] Quest walk stopped.");
-    });
+        std::puts("[QUEST] Quest walk stopped."); });
 }
 
 // ========================= Hunt control =========================
 
 static void stop_auto_hunt()
-{ gAutoHuntRun=false; if(gAutoHuntThread.joinable()) gAutoHuntThread.join(); }
+{
+    gAutoHuntRun = false;
+    if (gAutoHuntThread.joinable())
+        gAutoHuntThread.join();
+}
 
 static void start_auto_hunt_with_saved_config(); // forward
 
 static void maybe_restart_hunt_on_shift()
 {
-    if ((GetAsyncKeyState(VK_SHIFT) & 1) == 0) return;
-    if (gAutoHuntRun.load()) return;
-    if (!gBattleStarted.load()) return;
+    if ((GetAsyncKeyState(VK_SHIFT) & 1) == 0)
+        return;
+    if (gAutoHuntRun.load())
+        return;
+    if (!gBattleStarted.load())
+        return;
     std::printf("[HUNT] SHIFT -> restart hunt, clear battle flag.\n");
     gBattleStarted = false;
     start_auto_hunt_with_saved_config();
@@ -1263,26 +1576,37 @@ static void start_auto_hunt(const char *enemyTemplatesPath, const char *battleSt
                             int scanMs, int attackCooldownMs)
 {
     stop_auto_hunt();
-    gBattleStarted=false;
-    gHuntInfo.detections=0; gHuntInfo.attacks=0;
-    gHuntInfo.lastX=-1; gHuntInfo.lastY=-1;
-    gHuntInfo.lastConf=0.0; gHuntInfo.lastWasBattle=false;
+    gBattleStarted = false;
+    gHuntInfo.detections = 0;
+    gHuntInfo.attacks = 0;
+    gHuntInfo.lastX = -1;
+    gHuntInfo.lastY = -1;
+    gHuntInfo.lastConf = 0.0;
+    gHuntInfo.lastWasBattle = false;
     gHuntInfo.setLastName("(none)");
     overlay_invalidate();
 
     if (!gDet.loadEnemyTemplates(enemyTemplatesPath))
-    { std::fprintf(stderr,"[HUNT] Failed enemy templates: %s\n",enemyTemplatesPath); return; }
+    {
+        std::fprintf(stderr, "[HUNT] Failed enemy templates: %s\n", enemyTemplatesPath);
+        return;
+    }
     if (!gDet.loadBattleStartTemplate(battleStartTemplatePath))
-    { std::fprintf(stderr,"[HUNT] Failed battle template: %s\n",battleStartTemplatePath); return; }
+    {
+        std::fprintf(stderr, "[HUNT] Failed battle template: %s\n", battleStartTemplatePath);
+        return;
+    }
 
     gDet.setEnemyThreshold(enemyThreshold);
     gDet.setBattleThreshold(battleThreshold);
-    if (scanMs < 20) scanMs = 20;
-    if (attackCooldownMs < 100) attackCooldownMs = 100;
+    if (scanMs < 20)
+        scanMs = 20;
+    if (attackCooldownMs < 100)
+        attackCooldownMs = 100;
 
     gAutoHuntRun = true;
     gAutoHuntThread = std::thread([=]()
-    {
+                                  {
         auto lastAttack = std::chrono::steady_clock::now() - std::chrono::milliseconds(attackCooldownMs);
         int tick = 0;
         std::printf("[HUNT] Thread started.\n");
@@ -1337,14 +1661,16 @@ static void start_auto_hunt(const char *enemyTemplatesPath, const char *battleSt
                                 gDet.enemyName(idx), enemyConf, p.x, p.y);
             }
             Sleep(scanMs);
-        }
-    });
+        } });
 }
 
 static void start_auto_hunt_with_saved_config()
 {
-    if (gEnemyTemplatesPath.empty()||gBattleStartPath.empty())
-    { std::fprintf(stderr,"[HUNT] No saved config.\n"); return; }
+    if (gEnemyTemplatesPath.empty() || gBattleStartPath.empty())
+    {
+        std::fprintf(stderr, "[HUNT] No saved config.\n");
+        return;
+    }
     start_auto_hunt(gEnemyTemplatesPath.c_str(), gBattleStartPath.c_str(),
                     gEnemyTh, gBattleTh, gScanMs, gCooldownMs);
 }
@@ -1364,40 +1690,69 @@ static void stop_all_threads()
 
 static bool record_to_file(const char *path)
 {
-    ZeroMemory(gMouseBtn,sizeof(gMouseBtn)); ZeroMemory(gKeyDown,sizeof(gKeyDown));
-    gLastDx=gLastDy=0; gLastWheel=0; gCursorPt=POINT{0,0};
-    gAbsByAlt=false; gAbsByCursor=false;
+    ZeroMemory(gMouseBtn, sizeof(gMouseBtn));
+    ZeroMemory(gKeyDown, sizeof(gKeyDown));
+    gLastDx = gLastDy = 0;
+    gLastWheel = 0;
+    gCursorPt = POINT{0, 0};
+    gAbsByAlt = false;
+    gAbsByCursor = false;
 
     gOut = std::fopen(path, "wb");
-    if (!gOut) { std::fprintf(stderr,"Cannot open: %s\n",path); return false; }
+    if (!gOut)
+    {
+        std::fprintf(stderr, "Cannot open: %s\n", path);
+        return false;
+    }
 
-    static char fileBuf[1<<20]; setvbuf(gOut, fileBuf, _IOFBF, sizeof(fileBuf));
+    static char fileBuf[1 << 20];
+    setvbuf(gOut, fileBuf, _IOFBF, sizeof(fileBuf));
 
-    FileHeader hdr{}; hdr.magic=0x524D4143; hdr.version=1;
-    FILETIME ft{}; GetSystemTimeAsFileTime(&ft);
-    hdr.start_utc=((uint64_t)ft.dwHighDateTime<<32)|ft.dwLowDateTime;
-    fwrite(&hdr, sizeof(hdr), 1, gOut); fflush(gOut);
+    FileHeader hdr{};
+    hdr.magic = 0x524D4143;
+    hdr.version = 1;
+    FILETIME ft{};
+    GetSystemTimeAsFileTime(&ft);
+    hdr.start_utc = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    fwrite(&hdr, sizeof(hdr), 1, gOut);
+    fflush(gOut);
 
-    if (!create_sink_window())    return false;
-    if (!create_overlay_window()) return false;
+    if (!create_sink_window())
+        return false;
+    if (!create_overlay_window())
+        return false;
 
-    QueryPerformanceFrequency(&gFreq); QueryPerformanceCounter(&gT0);
+    QueryPerformanceFrequency(&gFreq);
+    QueryPerformanceCounter(&gT0);
     timeBeginPeriod(1);
     start_abs_poll_thread();
     start_cursor_detect_thread();
 
     countdown_3s("Recording will begin");
-    gRecording=true; overlay_show(true);
+    gRecording = true;
+    overlay_show(true);
     std::puts("Recording... (ESC to stop)");
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0) > 0)
-    { maybe_restart_hunt_on_shift(); TranslateMessage(&msg); DispatchMessage(&msg); }
+    {
+        maybe_restart_hunt_on_shift();
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
 
-    gRecording=false; overlay_show(false);
-    stop_all_threads(); flush_events(); timeEndPeriod(1);
-    if (gOut) { std::fclose(gOut); gOut=nullptr; }
-    destroy_overlay_window(); destroy_sink_window();
+    gRecording = false;
+    overlay_show(false);
+    stop_all_threads();
+    flush_events();
+    timeEndPeriod(1);
+    if (gOut)
+    {
+        std::fclose(gOut);
+        gOut = nullptr;
+    }
+    destroy_overlay_window();
+    destroy_sink_window();
     std::puts("Recording stopped.");
     return true;
 }
@@ -1405,34 +1760,58 @@ static bool record_to_file(const char *path)
 static bool play_file(const char *path)
 {
     FILE *in = std::fopen(path, "rb");
-    if (!in) { std::fprintf(stderr,"Cannot open: %s\n",path); return false; }
+    if (!in)
+    {
+        std::fprintf(stderr, "Cannot open: %s\n", path);
+        return false;
+    }
     FileHeader hdr{};
-    if (read_exact(in,&hdr,sizeof(hdr))!=sizeof(hdr)||hdr.magic!=0x524D4143)
-    { std::fprintf(stderr,"Invalid format.\n"); std::fclose(in); return false; }
-    std::vector<Event> events; Event ev{};
-    while (read_exact(in,&ev,sizeof(ev))==sizeof(ev)) events.push_back(ev);
+    if (read_exact(in, &hdr, sizeof(hdr)) != sizeof(hdr) || hdr.magic != 0x524D4143)
+    {
+        std::fprintf(stderr, "Invalid format.\n");
+        std::fclose(in);
+        return false;
+    }
+    std::vector<Event> events;
+    Event ev{};
+    while (read_exact(in, &ev, sizeof(ev)) == sizeof(ev))
+        events.push_back(ev);
     std::fclose(in);
 
     countdown_3s("Playback will begin");
     std::puts("Playing... (ESC to stop)");
-    while (GetAsyncKeyState(VK_ESCAPE)&0x8000) Sleep(10);
+    while (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+        Sleep(10);
 
-    ZeroMemory(gMouseBtn,sizeof(gMouseBtn)); ZeroMemory(gKeyDown,sizeof(gKeyDown));
-    gLastDx=gLastDy=0; gLastWheel=0; GetCursorPos(&gCursorPt);
-    gAbsByAlt=false; gAbsByCursor=false;
+    ZeroMemory(gMouseBtn, sizeof(gMouseBtn));
+    ZeroMemory(gKeyDown, sizeof(gKeyDown));
+    gLastDx = gLastDy = 0;
+    gLastWheel = 0;
+    GetCursorPos(&gCursorPt);
+    gAbsByAlt = false;
+    gAbsByCursor = false;
 
     bool overlay_ok = create_overlay_window();
-    if (overlay_ok) { overlay_show(true); pump_messages_nonblocking(); }
+    if (overlay_ok)
+    {
+        overlay_show(true);
+        pump_messages_nonblocking();
+    }
 
-    gPlaying=true; timeBeginPeriod(1);
+    gPlaying = true;
+    timeBeginPeriod(1);
     start_cursor_detect_thread();
 
     uint64_t prev_t = 0;
     for (size_t i = 0; i < events.size(); ++i)
     {
         maybe_restart_hunt_on_shift();
-        gAbsByAlt = ((GetAsyncKeyState(VK_MENU)&0x8000)!=0);
-        if (GetAsyncKeyState(VK_ESCAPE)&0x8000) { std::puts("\nStopped by ESC."); break; }
+        gAbsByAlt = ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
+        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+        {
+            std::puts("\nStopped by ESC.");
+            break;
+        }
 
         const Event &e = events[i];
         if (e.t_us > prev_t)
@@ -1442,30 +1821,57 @@ static bool play_file(const char *path)
         switch (e.type)
         {
         case EV_MOUSE_MOVE:
-            send_mouse_move_rel(e.a,e.b); GetCursorPos(&gCursorPt);
-            gLastDx=e.a; gLastDy=e.b; overlay_invalidate(); pump_messages_nonblocking(); break;
+            send_mouse_move_rel(e.a, e.b);
+            GetCursorPos(&gCursorPt);
+            gLastDx = e.a;
+            gLastDy = e.b;
+            overlay_invalidate();
+            pump_messages_nonblocking();
+            break;
         case EV_MOUSE_POS:
-            send_mouse_move_abs(e.a,e.b); gCursorPt.x=e.a; gCursorPt.y=e.b;
-            overlay_invalidate(); pump_messages_nonblocking(); break;
+            send_mouse_move_abs(e.a, e.b);
+            gCursorPt.x = e.a;
+            gCursorPt.y = e.b;
+            overlay_invalidate();
+            pump_messages_nonblocking();
+            break;
         case EV_MOUSE_WHEEL:
-            send_mouse_wheel(e.a); gLastWheel=(int)e.a;
-            overlay_invalidate(); pump_messages_nonblocking(); break;
+            send_mouse_wheel(e.a);
+            gLastWheel = (int)e.a;
+            overlay_invalidate();
+            pump_messages_nonblocking();
+            break;
         case EV_MOUSE_BUTTON:
-            send_mouse_button(e.a,e.b!=0);
-            if(e.a>=1&&e.a<=5) gMouseBtn[e.a]=(e.b!=0);
-            overlay_invalidate(); pump_messages_nonblocking(); break;
+            send_mouse_button(e.a, e.b != 0);
+            if (e.a >= 1 && e.a <= 5)
+                gMouseBtn[e.a] = (e.b != 0);
+            overlay_invalidate();
+            pump_messages_nonblocking();
+            break;
         case EV_KEY_DOWN:
-            send_key(true,(UINT)e.a); update_overlay_state_on_key((UINT)e.a,true);
-            pump_messages_nonblocking(); break;
+            send_key(true, (UINT)e.a);
+            update_overlay_state_on_key((UINT)e.a, true);
+            pump_messages_nonblocking();
+            break;
         case EV_KEY_UP:
-            send_key(false,(UINT)e.a); update_overlay_state_on_key((UINT)e.a,false);
-            pump_messages_nonblocking(); break;
-        default: break;
+            send_key(false, (UINT)e.a);
+            update_overlay_state_on_key((UINT)e.a, false);
+            pump_messages_nonblocking();
+            break;
+        default:
+            break;
         }
     }
 
-    gPlaying=false; stop_all_threads(); timeEndPeriod(1);
-    if (overlay_ok) { overlay_show(false); destroy_overlay_window(); pump_messages_nonblocking(); }
+    gPlaying = false;
+    stop_all_threads();
+    timeEndPeriod(1);
+    if (overlay_ok)
+    {
+        overlay_show(false);
+        destroy_overlay_window();
+        pump_messages_nonblocking();
+    }
     std::puts("Done.");
     return true;
 }
@@ -1475,8 +1881,12 @@ static bool play_file(const char *path)
 static bool record_hunt(const char *file, const char *ep, const char *bp,
                         double et, double bt, int sm, int cm)
 {
-    gEnemyTemplatesPath=ep; gBattleStartPath=bp;
-    gEnemyTh=et; gBattleTh=bt; gScanMs=sm; gCooldownMs=cm;
+    gEnemyTemplatesPath = ep;
+    gBattleStartPath = bp;
+    gEnemyTh = et;
+    gBattleTh = bt;
+    gScanMs = sm;
+    gCooldownMs = cm;
     start_auto_hunt(ep, bp, et, bt, sm, cm);
     return record_to_file(file);
 }
@@ -1484,8 +1894,12 @@ static bool record_hunt(const char *file, const char *ep, const char *bp,
 static bool play_hunt(const char *file, const char *ep, const char *bp,
                       double et, double bt, int sm, int cm)
 {
-    gEnemyTemplatesPath=ep; gBattleStartPath=bp;
-    gEnemyTh=et; gBattleTh=bt; gScanMs=sm; gCooldownMs=cm;
+    gEnemyTemplatesPath = ep;
+    gBattleStartPath = bp;
+    gEnemyTh = et;
+    gBattleTh = bt;
+    gScanMs = sm;
+    gCooldownMs = cm;
     start_auto_hunt(ep, bp, et, bt, sm, cm);
     return play_file(file);
 }
@@ -1495,19 +1909,34 @@ static bool play_hunt(const char *file, const char *ep, const char *bp,
 static void quest_walk_standalone(const cv::Mat &questTempl, double markerTh, int deadzonePx, int tickMs)
 {
     bool overlay_ok = create_overlay_window();
-    if (overlay_ok) { overlay_show(true); pump_messages_nonblocking(); }
+    if (overlay_ok)
+    {
+        overlay_show(true);
+        pump_messages_nonblocking();
+    }
     show_ignore_rect_overlay();
     timeBeginPeriod(1);
     start_quest_walk(questTempl, markerTh, deadzonePx, tickMs);
     while (gRunQuestWalk.load())
     {
-        if (GetAsyncKeyState(VK_ESCAPE)&0x8000) { stop_quest_walk(); break; }
-        pump_messages_nonblocking(); Sleep(50);
+        if (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+        {
+            stop_quest_walk();
+            break;
+        }
+        pump_messages_nonblocking();
+        Sleep(50);
     }
-    if (gQuestWalkThread.joinable()) gQuestWalkThread.join();
+    if (gQuestWalkThread.joinable())
+        gQuestWalkThread.join();
     timeEndPeriod(1);
     hide_ignore_rect_overlay();
-    if (overlay_ok) { overlay_show(false); destroy_overlay_window(); pump_messages_nonblocking(); }
+    if (overlay_ok)
+    {
+        overlay_show(false);
+        destroy_overlay_window();
+        pump_messages_nonblocking();
+    }
 }
 
 // ========================= Full integrated mode =========================
@@ -1516,47 +1945,85 @@ static void quest_walk_standalone(const cv::Mat &questTempl, double markerTh, in
 
 static bool run_full_integrated(const char *macroFile)
 {
-    gEnemyTemplatesPath    = kDefaultEnemyPath;
-    gBattleStartPath       = kDefaultBattlePath;
+    gEnemyTemplatesPath = kDefaultEnemyPath;
+    gBattleStartPath = kDefaultBattlePath;
     gAbsCursorTemplatePath = kDefaultCursorPath;
 
-    ZeroMemory(gMouseBtn,sizeof(gMouseBtn)); ZeroMemory(gKeyDown,sizeof(gKeyDown));
-    gLastDx=gLastDy=0; gLastWheel=0; gCursorPt=POINT{0,0};
-    gAbsByAlt=false; gAbsByCursor=false;
+    ZeroMemory(gMouseBtn, sizeof(gMouseBtn));
+    ZeroMemory(gKeyDown, sizeof(gKeyDown));
+    gLastDx = gLastDy = 0;
+    gLastWheel = 0;
+    gCursorPt = POINT{0, 0};
+    gAbsByAlt = false;
+    gAbsByCursor = false;
 
     gOut = std::fopen(macroFile, "wb");
-    if (!gOut) { std::fprintf(stderr,"[FULL] Cannot open: %s\n",macroFile); return false; }
+    if (!gOut)
+    {
+        std::fprintf(stderr, "[FULL] Cannot open: %s\n", macroFile);
+        return false;
+    }
 
-    static char fileBuf[1<<20]; setvbuf(gOut,fileBuf,_IOFBF,sizeof(fileBuf));
-    FileHeader hdr{}; hdr.magic=0x524D4143; hdr.version=1;
-    FILETIME ft{}; GetSystemTimeAsFileTime(&ft);
-    hdr.start_utc=((uint64_t)ft.dwHighDateTime<<32)|ft.dwLowDateTime;
-    fwrite(&hdr,sizeof(hdr),1,gOut); fflush(gOut);
+    static char fileBuf[1 << 20];
+    setvbuf(gOut, fileBuf, _IOFBF, sizeof(fileBuf));
+    FileHeader hdr{};
+    hdr.magic = 0x524D4143;
+    hdr.version = 1;
+    FILETIME ft{};
+    GetSystemTimeAsFileTime(&ft);
+    hdr.start_utc = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    fwrite(&hdr, sizeof(hdr), 1, gOut);
+    fflush(gOut);
 
-    if (!create_sink_window())    { std::fclose(gOut); gOut=nullptr; return false; }
-    if (!create_overlay_window()) { destroy_sink_window(); std::fclose(gOut); gOut=nullptr; return false; }
+    if (!create_sink_window())
+    {
+        std::fclose(gOut);
+        gOut = nullptr;
+        return false;
+    }
+    if (!create_overlay_window())
+    {
+        destroy_sink_window();
+        std::fclose(gOut);
+        gOut = nullptr;
+        return false;
+    }
 
-    QueryPerformanceFrequency(&gFreq); QueryPerformanceCounter(&gT0);
+    QueryPerformanceFrequency(&gFreq);
+    QueryPerformanceCounter(&gT0);
     timeBeginPeriod(1);
 
     start_abs_poll_thread();
     start_cursor_detect_thread();
     // Hunt runs during recording so enemies are detected while you play manually
-    start_auto_hunt(kDefaultEnemyPath,kDefaultBattlePath,gEnemyTh,gBattleTh,gScanMs,gCooldownMs);
+    start_auto_hunt(kDefaultEnemyPath, kDefaultBattlePath, gEnemyTh, gBattleTh, gScanMs, gCooldownMs);
     // Quest walk is NOT started here - use playfull for guided replay
 
     countdown_3s("[FULL] Recording + Hunt (no quest walk - use playfull to replay)");
-    gRecording=true; overlay_show(true);
+    gRecording = true;
+    overlay_show(true);
     std::puts("[FULL] Recording. ESC to stop. Use playfull to replay with quest walk.");
 
     MSG msg;
-    while (GetMessage(&msg,nullptr,0,0) > 0)
-    { maybe_restart_hunt_on_shift(); TranslateMessage(&msg); DispatchMessage(&msg); }
+    while (GetMessage(&msg, nullptr, 0, 0) > 0)
+    {
+        maybe_restart_hunt_on_shift();
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
 
-    gRecording=false; overlay_show(false);
-    stop_all_threads(); flush_events(); timeEndPeriod(1);
-    if (gOut) { std::fclose(gOut); gOut=nullptr; }
-    destroy_overlay_window(); destroy_sink_window();
+    gRecording = false;
+    overlay_show(false);
+    stop_all_threads();
+    flush_events();
+    timeEndPeriod(1);
+    if (gOut)
+    {
+        std::fclose(gOut);
+        gOut = nullptr;
+    }
+    destroy_overlay_window();
+    destroy_sink_window();
     std::puts("[FULL] Recording stopped.");
     return true;
 }
@@ -1569,7 +2036,7 @@ static bool run_full_integrated(const char *macroFile)
 static bool play_full(const char *macroFile,
                       double markerTh, int deadzonePx, int tickMs,
                       double enemyTh, double battleTh, int scanMs, int cooldownMs,
-                      int ignL=45, int ignT=282, int ignR=72, int ignB=311)
+                      int ignL = 45, int ignT = 282, int ignR = 72, int ignB = 311)
 {
     // Load quest marker template
     cv::Mat questTempl = cv::imread(kDefaultQuestPath, cv::IMREAD_COLOR);
@@ -1580,24 +2047,35 @@ static bool play_full(const char *macroFile,
     }
 
     // Setup config
-    gEnemyTemplatesPath    = kDefaultEnemyPath;
-    gBattleStartPath       = kDefaultBattlePath;
+    gEnemyTemplatesPath = kDefaultEnemyPath;
+    gBattleStartPath = kDefaultBattlePath;
     gAbsCursorTemplatePath = kDefaultCursorPath;
-    gEnemyTh    = enemyTh;   gBattleTh  = battleTh;
-    gScanMs     = scanMs;    gCooldownMs = cooldownMs;
-    gMarkerTh   = markerTh;  gDeadzonePx = deadzonePx;
+    gEnemyTh = enemyTh;
+    gBattleTh = battleTh;
+    gScanMs = scanMs;
+    gCooldownMs = cooldownMs;
+    gMarkerTh = markerTh;
+    gDeadzonePx = deadzonePx;
     gQuestTickMs = tickMs;
-    gQuestLogIgnore = { ignL, ignT, ignR, ignB };
+    gQuestLogIgnore = {ignL, ignT, ignR, ignB};
 
     countdown_3s("[PLAYFULL] Full automation starting");
     std::puts("[PLAYFULL] Running quest walk + hunt. ESC to stop.");
-    while (GetAsyncKeyState(VK_ESCAPE)&0x8000) Sleep(10);
+    while (GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+        Sleep(10);
 
-    ZeroMemory(gMouseBtn,sizeof(gMouseBtn)); ZeroMemory(gKeyDown,sizeof(gKeyDown));
-    gLastDx=gLastDy=0; gLastWheel=0; GetCursorPos(&gCursorPt);
+    ZeroMemory(gMouseBtn, sizeof(gMouseBtn));
+    ZeroMemory(gKeyDown, sizeof(gKeyDown));
+    gLastDx = gLastDy = 0;
+    gLastWheel = 0;
+    GetCursorPos(&gCursorPt);
 
     bool overlay_ok = create_overlay_window();
-    if (overlay_ok) { overlay_show(true); pump_messages_nonblocking(); }
+    if (overlay_ok)
+    {
+        overlay_show(true);
+        pump_messages_nonblocking();
+    }
     show_ignore_rect_overlay();
 
     gPlaying = true;
@@ -1622,10 +2100,13 @@ static bool play_full(const char *macroFile,
     timeEndPeriod(1);
 
     hide_ignore_rect_overlay();
-    if (overlay_ok) { overlay_show(false); destroy_overlay_window(); pump_messages_nonblocking(); }
+    if (overlay_ok)
+    {
+        overlay_show(false);
+        destroy_overlay_window();
+        pump_messages_nonblocking();
+    }
     std::puts("[PLAYFULL] Done.");
-    return true;
-}
     return true;
 }
 
@@ -1636,53 +2117,112 @@ static const char *vk_name(int vk)
 {
     switch (vk)
     {
-    case VK_LBUTTON:  return "LBUTTON";
-    case VK_RBUTTON:  return "RBUTTON";
-    case VK_MBUTTON:  return "MBUTTON";
-    case VK_BACK:     return "BACKSPACE";
-    case VK_TAB:      return "TAB";
-    case VK_RETURN:   return "ENTER";
-    case VK_SHIFT:    return "SHIFT";
-    case VK_CONTROL:  return "CTRL";
-    case VK_MENU:     return "ALT";
-    case VK_PAUSE:    return "PAUSE";
-    case VK_CAPITAL:  return "CAPSLOCK";
-    case VK_ESCAPE:   return "ESCAPE";
-    case VK_SPACE:    return "SPACE";
-    case VK_PRIOR:    return "PAGEUP";
-    case VK_NEXT:     return "PAGEDOWN";
-    case VK_END:      return "END";
-    case VK_HOME:     return "HOME";
-    case VK_LEFT:     return "LEFT";
-    case VK_UP:       return "UP";
-    case VK_RIGHT:    return "RIGHT";
-    case VK_DOWN:     return "DOWN";
-    case VK_INSERT:   return "INSERT";
-    case VK_DELETE:   return "DELETE";
-    case VK_LWIN:     return "LWIN";
-    case VK_RWIN:     return "RWIN";
-    case VK_NUMPAD0:  return "NUMPAD0";
-    case VK_NUMPAD1:  return "NUMPAD1";
-    case VK_NUMPAD2:  return "NUMPAD2";
-    case VK_NUMPAD3:  return "NUMPAD3";
-    case VK_NUMPAD4:  return "NUMPAD4";
-    case VK_NUMPAD5:  return "NUMPAD5";
-    case VK_NUMPAD6:  return "NUMPAD6";
-    case VK_NUMPAD7:  return "NUMPAD7";
-    case VK_NUMPAD8:  return "NUMPAD8";
-    case VK_NUMPAD9:  return "NUMPAD9";
-    case VK_F1:  return "F1";  case VK_F2:  return "F2";
-    case VK_F3:  return "F3";  case VK_F4:  return "F4";
-    case VK_F5:  return "F5";  case VK_F6:  return "F6";
-    case VK_F7:  return "F7";  case VK_F8:  return "F8";
-    case VK_F9:  return "F9";  case VK_F10: return "F10";
-    case VK_F11: return "F11"; case VK_F12: return "F12";
-    case VK_LSHIFT:   return "LSHIFT";
-    case VK_RSHIFT:   return "RSHIFT";
-    case VK_LCONTROL: return "LCTRL";
-    case VK_RCONTROL: return "RCTRL";
-    case VK_LMENU:    return "LALT";
-    case VK_RMENU:    return "RALT";
+    case VK_LBUTTON:
+        return "LBUTTON";
+    case VK_RBUTTON:
+        return "RBUTTON";
+    case VK_MBUTTON:
+        return "MBUTTON";
+    case VK_BACK:
+        return "BACKSPACE";
+    case VK_TAB:
+        return "TAB";
+    case VK_RETURN:
+        return "ENTER";
+    case VK_SHIFT:
+        return "SHIFT";
+    case VK_CONTROL:
+        return "CTRL";
+    case VK_MENU:
+        return "ALT";
+    case VK_PAUSE:
+        return "PAUSE";
+    case VK_CAPITAL:
+        return "CAPSLOCK";
+    case VK_ESCAPE:
+        return "ESCAPE";
+    case VK_SPACE:
+        return "SPACE";
+    case VK_PRIOR:
+        return "PAGEUP";
+    case VK_NEXT:
+        return "PAGEDOWN";
+    case VK_END:
+        return "END";
+    case VK_HOME:
+        return "HOME";
+    case VK_LEFT:
+        return "LEFT";
+    case VK_UP:
+        return "UP";
+    case VK_RIGHT:
+        return "RIGHT";
+    case VK_DOWN:
+        return "DOWN";
+    case VK_INSERT:
+        return "INSERT";
+    case VK_DELETE:
+        return "DELETE";
+    case VK_LWIN:
+        return "LWIN";
+    case VK_RWIN:
+        return "RWIN";
+    case VK_NUMPAD0:
+        return "NUMPAD0";
+    case VK_NUMPAD1:
+        return "NUMPAD1";
+    case VK_NUMPAD2:
+        return "NUMPAD2";
+    case VK_NUMPAD3:
+        return "NUMPAD3";
+    case VK_NUMPAD4:
+        return "NUMPAD4";
+    case VK_NUMPAD5:
+        return "NUMPAD5";
+    case VK_NUMPAD6:
+        return "NUMPAD6";
+    case VK_NUMPAD7:
+        return "NUMPAD7";
+    case VK_NUMPAD8:
+        return "NUMPAD8";
+    case VK_NUMPAD9:
+        return "NUMPAD9";
+    case VK_F1:
+        return "F1";
+    case VK_F2:
+        return "F2";
+    case VK_F3:
+        return "F3";
+    case VK_F4:
+        return "F4";
+    case VK_F5:
+        return "F5";
+    case VK_F6:
+        return "F6";
+    case VK_F7:
+        return "F7";
+    case VK_F8:
+        return "F8";
+    case VK_F9:
+        return "F9";
+    case VK_F10:
+        return "F10";
+    case VK_F11:
+        return "F11";
+    case VK_F12:
+        return "F12";
+    case VK_LSHIFT:
+        return "LSHIFT";
+    case VK_RSHIFT:
+        return "RSHIFT";
+    case VK_LCONTROL:
+        return "LCTRL";
+    case VK_RCONTROL:
+        return "RCTRL";
+    case VK_LMENU:
+        return "LALT";
+    case VK_RMENU:
+        return "RALT";
     default:
         // Printable ASCII
         if (vk >= 0x20 && vk <= 0x7E)
@@ -1699,31 +2239,18 @@ static const char *vk_name(int vk)
 static int vk_from_name(const char *name)
 {
     // Single printable char
-    if (name[0] && !name[1]) return (int)(unsigned char)name[0];
+    if (name[0] && !name[1])
+        return (int)(unsigned char)name[0];
 
-    struct { const char *n; int v; } table[] = {
-        {"LBUTTON",VK_LBUTTON},{"RBUTTON",VK_RBUTTON},{"MBUTTON",VK_MBUTTON},
-        {"BACKSPACE",VK_BACK},{"TAB",VK_TAB},{"ENTER",VK_RETURN},
-        {"SHIFT",VK_SHIFT},{"CTRL",VK_CONTROL},{"ALT",VK_MENU},
-        {"PAUSE",VK_PAUSE},{"CAPSLOCK",VK_CAPITAL},{"ESCAPE",VK_ESCAPE},
-        {"SPACE",VK_SPACE},{"PAGEUP",VK_PRIOR},{"PAGEDOWN",VK_NEXT},
-        {"END",VK_END},{"HOME",VK_HOME},{"LEFT",VK_LEFT},{"UP",VK_UP},
-        {"RIGHT",VK_RIGHT},{"DOWN",VK_DOWN},{"INSERT",VK_INSERT},{"DELETE",VK_DELETE},
-        {"LWIN",VK_LWIN},{"RWIN",VK_RWIN},
-        {"NUMPAD0",VK_NUMPAD0},{"NUMPAD1",VK_NUMPAD1},{"NUMPAD2",VK_NUMPAD2},
-        {"NUMPAD3",VK_NUMPAD3},{"NUMPAD4",VK_NUMPAD4},{"NUMPAD5",VK_NUMPAD5},
-        {"NUMPAD6",VK_NUMPAD6},{"NUMPAD7",VK_NUMPAD7},{"NUMPAD8",VK_NUMPAD8},
-        {"NUMPAD9",VK_NUMPAD9},
-        {"F1",VK_F1},{"F2",VK_F2},{"F3",VK_F3},{"F4",VK_F4},
-        {"F5",VK_F5},{"F6",VK_F6},{"F7",VK_F7},{"F8",VK_F8},
-        {"F9",VK_F9},{"F10",VK_F10},{"F11",VK_F11},{"F12",VK_F12},
-        {"LSHIFT",VK_LSHIFT},{"RSHIFT",VK_RSHIFT},
-        {"LCTRL",VK_LCONTROL},{"RCTRL",VK_RCONTROL},
-        {"LALT",VK_LMENU},{"RALT",VK_RMENU},
-        {nullptr, 0}
-    };
+    struct
+    {
+        const char *n;
+        int v;
+    } table[] = {
+        {"LBUTTON", VK_LBUTTON}, {"RBUTTON", VK_RBUTTON}, {"MBUTTON", VK_MBUTTON}, {"BACKSPACE", VK_BACK}, {"TAB", VK_TAB}, {"ENTER", VK_RETURN}, {"SHIFT", VK_SHIFT}, {"CTRL", VK_CONTROL}, {"ALT", VK_MENU}, {"PAUSE", VK_PAUSE}, {"CAPSLOCK", VK_CAPITAL}, {"ESCAPE", VK_ESCAPE}, {"SPACE", VK_SPACE}, {"PAGEUP", VK_PRIOR}, {"PAGEDOWN", VK_NEXT}, {"END", VK_END}, {"HOME", VK_HOME}, {"LEFT", VK_LEFT}, {"UP", VK_UP}, {"RIGHT", VK_RIGHT}, {"DOWN", VK_DOWN}, {"INSERT", VK_INSERT}, {"DELETE", VK_DELETE}, {"LWIN", VK_LWIN}, {"RWIN", VK_RWIN}, {"NUMPAD0", VK_NUMPAD0}, {"NUMPAD1", VK_NUMPAD1}, {"NUMPAD2", VK_NUMPAD2}, {"NUMPAD3", VK_NUMPAD3}, {"NUMPAD4", VK_NUMPAD4}, {"NUMPAD5", VK_NUMPAD5}, {"NUMPAD6", VK_NUMPAD6}, {"NUMPAD7", VK_NUMPAD7}, {"NUMPAD8", VK_NUMPAD8}, {"NUMPAD9", VK_NUMPAD9}, {"F1", VK_F1}, {"F2", VK_F2}, {"F3", VK_F3}, {"F4", VK_F4}, {"F5", VK_F5}, {"F6", VK_F6}, {"F7", VK_F7}, {"F8", VK_F8}, {"F9", VK_F9}, {"F10", VK_F10}, {"F11", VK_F11}, {"F12", VK_F12}, {"LSHIFT", VK_LSHIFT}, {"RSHIFT", VK_RSHIFT}, {"LCTRL", VK_LCONTROL}, {"RCTRL", VK_RCONTROL}, {"LALT", VK_LMENU}, {"RALT", VK_RMENU}, {nullptr, 0}};
     for (int i = 0; table[i].n; ++i)
-        if (_stricmp(name, table[i].n) == 0) return table[i].v;
+        if (_stricmp(name, table[i].n) == 0)
+            return table[i].v;
 
     // Fallback: try as decimal number
     return std::atoi(name);
@@ -1733,77 +2260,91 @@ static int vk_from_name(const char *name)
 static bool export_macro(const char *rmacPath, const char *txtPath)
 {
     FILE *in = std::fopen(rmacPath, "rb");
-    if (!in) { std::fprintf(stderr, "Cannot open: %s\n", rmacPath); return false; }
+    if (!in)
+    {
+        std::fprintf(stderr, "Cannot open: %s\n", rmacPath);
+        return false;
+    }
 
     FileHeader hdr{};
     if (read_exact(in, &hdr, sizeof(hdr)) != sizeof(hdr) || hdr.magic != 0x524D4143)
-    { std::fprintf(stderr, "Invalid .rmac file: %s\n", rmacPath); std::fclose(in); return false; }
+    {
+        std::fprintf(stderr, "Invalid .rmac file: %s\n", rmacPath);
+        std::fclose(in);
+        return false;
+    }
 
     std::vector<Event> events;
     Event ev{};
-    while (read_exact(in, &ev, sizeof(ev)) == sizeof(ev)) events.push_back(ev);
+    while (read_exact(in, &ev, sizeof(ev)) == sizeof(ev))
+        events.push_back(ev);
     std::fclose(in);
 
     // Calculate duration
     double durationS = events.empty() ? 0.0 : events.back().t_us / 1000000.0;
 
     // Get current time string
-    SYSTEMTIME st{}; GetLocalTime(&st);
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
     char timeBuf[64];
     std::snprintf(timeBuf, sizeof(timeBuf), "%04d-%02d-%02d %02d:%02d:%02d",
                   st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 
     FILE *out = std::fopen(txtPath, "w");
-    if (!out) { std::fprintf(stderr, "Cannot create: %s\n", txtPath); return false; }
+    if (!out)
+    {
+        std::fprintf(stderr, "Cannot create: %s\n", txtPath);
+        return false;
+    }
 
     // ---- Header ----
     std::fprintf(out,
-        "# RawIO Macro Export\n"
-        "# Source:    %s\n"
-        "# Exported:  %s\n"
-        "# Events:    %zu\n"
-        "# Duration:  %.3fs\n"
-        "#\n"
-        "# ── EVENT TYPES ──────────────────────────────────────────────────────\n"
-        "#  MOUSE_MOVE    REL vector capture  A=dx  B=dy\n"
-        "#                Mode: RELATIVE - affected by Windows mouse speed/accel\n"
-        "#                Tip: disable Enhance Pointer Precision for best accuracy\n"
-        "#                Tip: set pointer speed to middle notch (6/11)\n"
-        "#                Tip: hold ALT while recording to switch to ABS (MOUSE_POS)\n"
-        "#\n"
-        "#  MOUSE_POS     ABS coordinate      A=x   B=y\n"
-        "#                Mode: ABSOLUTE - exact screen pixel, always accurate\n"
-        "#                Recorded when ALT held OR Cursor.png matched\n"
-        "#\n"
-        "#  MOUSE_WHEEL   Wheel scroll        A=delta (120=one notch up)\n"
-        "#  MOUSE_BUTTON  Button event        A=button(1=L,2=R,3=M,4=X1,5=X2) B=1down/0up\n"
-        "#  KEY_DOWN      Key pressed         A=VK_code or name  (see list below)\n"
-        "#  KEY_UP        Key released        A=VK_code or name\n"
-        "#\n"
-        "# ── EDITING TIPS ──────────────────────────────────────────────────────\n"
-        "#  - TIME_US is microseconds from start. Keep events in time order.\n"
-        "#  - To delete an event: delete the entire line\n"
-        "#  - To fix a camera move: change A (dx) and B (dy) on MOUSE_MOVE lines\n"
-        "#  - To add a pause: increase TIME_US gap between two events\n"
-        "#  - To speed up a section: reduce TIME_US values proportionally\n"
-        "#  - SCALE multiplies ALL MOUSE_MOVE dx/dy values at import time\n"
-        "#    Use this to correct systematic drift without editing every line\n"
-        "#    Example: SCALE 0.90 shrinks all movements by 10%%\n"
-        "#  - Lines starting with # are comments and are ignored on import\n"
-        "#  - A and B accept either a number or a key name (e.g. SHIFT, F5, W)\n"
-        "#\n"
-        "# ── COMMON KEY NAMES ─────────────────────────────────────────────────\n"
-        "#  W A S D  SPACE  SHIFT  CTRL  ALT  ENTER  ESCAPE  TAB\n"
-        "#  F1-F12   LEFT RIGHT UP DOWN  PAGEUP PAGEDOWN  HOME END\n"
-        "#  NUMPAD0-9  LSHIFT RSHIFT  LCTRL RCTRL  LALT RALT\n"
-        "#\n"
-        "# SCALE 1.00\n"
-        "#\n"
-        "# %-16s %-14s %-7s %-7s %-7s  COMMENT\n"
-        "# %-16s %-14s %-7s %-7s %-7s\n",
-        rmacPath, timeBuf, events.size(), durationS,
-        "TIME_US", "EVENT", "A", "B", "C",
-        "-------", "-----", "-", "-", "-");
+                 "# RawIO Macro Export\n"
+                 "# Source:    %s\n"
+                 "# Exported:  %s\n"
+                 "# Events:    %zu\n"
+                 "# Duration:  %.3fs\n"
+                 "#\n"
+                 "# ── EVENT TYPES ──────────────────────────────────────────────────────\n"
+                 "#  MOUSE_MOVE    REL vector capture  A=dx  B=dy\n"
+                 "#                Mode: RELATIVE - affected by Windows mouse speed/accel\n"
+                 "#                Tip: disable Enhance Pointer Precision for best accuracy\n"
+                 "#                Tip: set pointer speed to middle notch (6/11)\n"
+                 "#                Tip: hold ALT while recording to switch to ABS (MOUSE_POS)\n"
+                 "#\n"
+                 "#  MOUSE_POS     ABS coordinate      A=x   B=y\n"
+                 "#                Mode: ABSOLUTE - exact screen pixel, always accurate\n"
+                 "#                Recorded when ALT held OR Cursor.png matched\n"
+                 "#\n"
+                 "#  MOUSE_WHEEL   Wheel scroll        A=delta (120=one notch up)\n"
+                 "#  MOUSE_BUTTON  Button event        A=button(1=L,2=R,3=M,4=X1,5=X2) B=1down/0up\n"
+                 "#  KEY_DOWN      Key pressed         A=VK_code or name  (see list below)\n"
+                 "#  KEY_UP        Key released        A=VK_code or name\n"
+                 "#\n"
+                 "# ── EDITING TIPS ──────────────────────────────────────────────────────\n"
+                 "#  - TIME_US is microseconds from start. Keep events in time order.\n"
+                 "#  - To delete an event: delete the entire line\n"
+                 "#  - To fix a camera move: change A (dx) and B (dy) on MOUSE_MOVE lines\n"
+                 "#  - To add a pause: increase TIME_US gap between two events\n"
+                 "#  - To speed up a section: reduce TIME_US values proportionally\n"
+                 "#  - SCALE multiplies ALL MOUSE_MOVE dx/dy values at import time\n"
+                 "#    Use this to correct systematic drift without editing every line\n"
+                 "#    Example: SCALE 0.90 shrinks all movements by 10%%\n"
+                 "#  - Lines starting with # are comments and are ignored on import\n"
+                 "#  - A and B accept either a number or a key name (e.g. SHIFT, F5, W)\n"
+                 "#\n"
+                 "# ── COMMON KEY NAMES ─────────────────────────────────────────────────\n"
+                 "#  W A S D  SPACE  SHIFT  CTRL  ALT  ENTER  ESCAPE  TAB\n"
+                 "#  F1-F12   LEFT RIGHT UP DOWN  PAGEUP PAGEDOWN  HOME END\n"
+                 "#  NUMPAD0-9  LSHIFT RSHIFT  LCTRL RCTRL  LALT RALT\n"
+                 "#\n"
+                 "# SCALE 1.00\n"
+                 "#\n"
+                 "# %-16s %-14s %-7s %-7s %-7s  COMMENT\n"
+                 "# %-16s %-14s %-7s %-7s %-7s\n",
+                 rmacPath, timeBuf, events.size(), durationS,
+                 "TIME_US", "EVENT", "A", "B", "C",
+                 "-------", "-----", "-", "-", "-");
 
     // ---- Events ----
     for (const auto &e : events)
@@ -1829,8 +2370,11 @@ static bool export_macro(const char *rmacPath, const char *txtPath)
         case EV_MOUSE_BUTTON:
         {
             evName = "MOUSE_BUTTON";
-            const char *btnName = (e.a==1?"LEFT":e.a==2?"RIGHT":e.a==3?"MIDDLE":
-                                   e.a==4?"X1":e.a==5?"X2":"?");
+            const char *btnName = (e.a == 1 ? "LEFT" : e.a == 2 ? "RIGHT"
+                                                   : e.a == 3   ? "MIDDLE"
+                                                   : e.a == 4   ? "X1"
+                                                   : e.a == 5   ? "X2"
+                                                                : "?");
             std::snprintf(comment, sizeof(comment), "# %s %s",
                           btnName, e.b ? "DOWN" : "UP");
             break;
@@ -1859,7 +2403,11 @@ static bool export_macro(const char *rmacPath, const char *txtPath)
 static bool import_macro(const char *txtPath, const char *rmacPath)
 {
     FILE *in = std::fopen(txtPath, "r");
-    if (!in) { std::fprintf(stderr, "Cannot open: %s\n", txtPath); return false; }
+    if (!in)
+    {
+        std::fprintf(stderr, "Cannot open: %s\n", txtPath);
+        return false;
+    }
 
     double scale = 1.0;
     std::vector<Event> events;
@@ -1873,10 +2421,12 @@ static bool import_macro(const char *txtPath, const char *rmacPath)
 
         // Strip leading whitespace
         char *p = line;
-        while (*p == ' ' || *p == '\t') ++p;
+        while (*p == ' ' || *p == '\t')
+            ++p;
 
         // Skip empty lines
-        if (*p == '\n' || *p == '\r' || *p == '\0') continue;
+        if (*p == '\n' || *p == '\r' || *p == '\0')
+            continue;
 
         // Check for SCALE directive in comments
         if (*p == '#')
@@ -1886,7 +2436,8 @@ static bool import_macro(const char *txtPath, const char *rmacPath)
             if (sc)
             {
                 sc += 5;
-                while (*sc == ' ' || *sc == '\t') ++sc;
+                while (*sc == ' ' || *sc == '\t')
+                    ++sc;
                 double s = std::atof(sc);
                 if (s > 0.01 && s < 100.0)
                 {
@@ -1899,8 +2450,8 @@ static bool import_macro(const char *txtPath, const char *rmacPath)
 
         // Parse: TIME_US  EVENT  A  B  C  [# comment...]
         char evName[32] = {};
-        char aStr[32]   = {};
-        char bStr[32]   = {};
+        char aStr[32] = {};
+        char bStr[32] = {};
         unsigned long long t_us = 0;
         int b = 0, c = 0;
 
@@ -1915,19 +2466,27 @@ static bool import_macro(const char *txtPath, const char *rmacPath)
 
         // A and B can be a number or a key name
         int a = std::atoi(aStr);
-        if (a == 0 && aStr[0] != '0') a = vk_from_name(aStr);
+        if (a == 0 && aStr[0] != '0')
+            a = vk_from_name(aStr);
 
         b = (parsed >= 4) ? std::atoi(bStr) : 0;
-        if (b == 0 && parsed >= 4 && bStr[0] != '0') b = vk_from_name(bStr);
+        if (b == 0 && parsed >= 4 && bStr[0] != '0')
+            b = vk_from_name(bStr);
 
         // Resolve event type
         uint32_t type = 0xFFFFFFFF;
-        if      (_stricmp(evName, "MOUSE_MOVE")   == 0) type = EV_MOUSE_MOVE;
-        else if (_stricmp(evName, "MOUSE_POS")    == 0) type = EV_MOUSE_POS;
-        else if (_stricmp(evName, "MOUSE_WHEEL")  == 0) type = EV_MOUSE_WHEEL;
-        else if (_stricmp(evName, "MOUSE_BUTTON") == 0) type = EV_MOUSE_BUTTON;
-        else if (_stricmp(evName, "KEY_DOWN")     == 0) type = EV_KEY_DOWN;
-        else if (_stricmp(evName, "KEY_UP")       == 0) type = EV_KEY_UP;
+        if (_stricmp(evName, "MOUSE_MOVE") == 0)
+            type = EV_MOUSE_MOVE;
+        else if (_stricmp(evName, "MOUSE_POS") == 0)
+            type = EV_MOUSE_POS;
+        else if (_stricmp(evName, "MOUSE_WHEEL") == 0)
+            type = EV_MOUSE_WHEEL;
+        else if (_stricmp(evName, "MOUSE_BUTTON") == 0)
+            type = EV_MOUSE_BUTTON;
+        else if (_stricmp(evName, "KEY_DOWN") == 0)
+            type = EV_KEY_DOWN;
+        else if (_stricmp(evName, "KEY_UP") == 0)
+            type = EV_KEY_UP;
         else
         {
             std::fprintf(stderr, "[IMPORT] Line %d: unknown event '%s', skipping.\n", lineNum, evName);
@@ -1943,30 +2502,42 @@ static bool import_macro(const char *txtPath, const char *rmacPath)
         }
 
         Event ev{};
-        ev.type  = type;
-        ev.t_us  = (uint64_t)t_us;
-        ev.a     = a;
-        ev.b     = b;
-        ev.c     = c;
+        ev.type = type;
+        ev.t_us = (uint64_t)t_us;
+        ev.a = a;
+        ev.b = b;
+        ev.c = c;
         events.push_back(ev);
     }
     std::fclose(in);
 
     if (events.empty())
-    { std::fprintf(stderr, "[IMPORT] No valid events found in: %s\n", txtPath); return false; }
+    {
+        std::fprintf(stderr, "[IMPORT] No valid events found in: %s\n", txtPath);
+        return false;
+    }
 
     // Sort by time just in case editing reordered lines
     std::sort(events.begin(), events.end(),
-              [](const Event &x, const Event &y){ return x.t_us < y.t_us; });
+              [](const Event &x, const Event &y)
+              { return x.t_us < y.t_us; });
 
     // Write binary .rmac
     FILE *out = std::fopen(rmacPath, "wb");
-    if (!out) { std::fprintf(stderr, "Cannot create: %s\n", rmacPath); return false; }
+    if (!out)
+    {
+        std::fprintf(stderr, "Cannot create: %s\n", rmacPath);
+        return false;
+    }
 
-    static char fileBuf[1<<20]; setvbuf(out, fileBuf, _IOFBF, sizeof(fileBuf));
+    static char fileBuf[1 << 20];
+    setvbuf(out, fileBuf, _IOFBF, sizeof(fileBuf));
 
-    FileHeader hdr{}; hdr.magic = 0x524D4143; hdr.version = 1;
-    FILETIME ft{}; GetSystemTimeAsFileTime(&ft);
+    FileHeader hdr{};
+    hdr.magic = 0x524D4143;
+    hdr.version = 1;
+    FILETIME ft{};
+    GetSystemTimeAsFileTime(&ft);
     hdr.start_utc = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
     fwrite(&hdr, sizeof(hdr), 1, out);
 
@@ -1985,23 +2556,29 @@ static bool import_macro(const char *txtPath, const char *rmacPath)
 
 static void parse_abs_args(int argc, char **argv, int i)
 {
-    if (argc>i)   gAbsCursorTemplatePath = argv[i];
-    if (argc>i+1) gCursorTh     = std::atof(argv[i+1]);
-    if (argc>i+2) gCursorScanMs = std::atoi(argv[i+2]);
-    if (argc>i+3) gAbsPollMs    = std::atoi(argv[i+3]);
-    gCursorTh = std::clamp(gCursorTh,0.1,0.999);
-    if (gCursorScanMs<10) gCursorScanMs=10;
-    if (gAbsPollMs<1)     gAbsPollMs=1;
+    if (argc > i)
+        gAbsCursorTemplatePath = argv[i];
+    if (argc > i + 1)
+        gCursorTh = std::atof(argv[i + 1]);
+    if (argc > i + 2)
+        gCursorScanMs = std::atoi(argv[i + 2]);
+    if (argc > i + 3)
+        gAbsPollMs = std::atoi(argv[i + 3]);
+    gCursorTh = std::clamp(gCursorTh, 0.1, 0.999);
+    if (gCursorScanMs < 10)
+        gCursorScanMs = 10;
+    if (gAbsPollMs < 1)
+        gAbsPollMs = 1;
 }
 
 static void parse_ignore_rect(int argc, char **argv, int i)
 {
-    if (argc>i+3)
+    if (argc > i + 3)
     {
-        gQuestLogIgnore.left   = std::atoi(argv[i+0]);
-        gQuestLogIgnore.top    = std::atoi(argv[i+1]);
-        gQuestLogIgnore.right  = std::atoi(argv[i+2]);
-        gQuestLogIgnore.bottom = std::atoi(argv[i+3]);
+        gQuestLogIgnore.left = std::atoi(argv[i + 0]);
+        gQuestLogIgnore.top = std::atoi(argv[i + 1]);
+        gQuestLogIgnore.right = std::atoi(argv[i + 2]);
+        gQuestLogIgnore.bottom = std::atoi(argv[i + 3]);
     }
 }
 
@@ -2038,13 +2615,13 @@ int main(int argc, char **argv)
             "  4) Recorder.exe import edit.txt macro.rmac <- import back\n"
             "  5) Recorder.exe playfull macro.rmac        <- replay with quest walk + hunt\n"
             "\nDistance: stop at %dm, resume at %dm. OCR uses tessdata\\eng.traineddata\n",
-            argv[0],kDefaultMacroFile,
-            argv[0],kDefaultMacroFile,
-            argv[0],kDefaultMacroFile,
-            argv[0],kDefaultMacroFile,
+            argv[0], kDefaultMacroFile,
+            argv[0], kDefaultMacroFile,
+            argv[0], kDefaultMacroFile,
+            argv[0], kDefaultMacroFile,
             argv[0], argv[0],
-            argv[0],kDefaultQuestPath,
-            argv[0],kDefaultEnemyPath,kDefaultBattlePath,
+            argv[0], kDefaultQuestPath,
+            argv[0], kDefaultEnemyPath, kDefaultBattlePath,
             argv[0], argv[0],
             kArrivalMeters, kResumeMeters);
         return 0;
@@ -2055,107 +2632,143 @@ int main(int argc, char **argv)
     if (cmd == "export")
     {
         if (argc < 4)
-        { std::fprintf(stderr, "Usage: %s export <file.rmac> <file.txt>\n", argv[0]); return 1; }
+        {
+            std::fprintf(stderr, "Usage: %s export <file.rmac> <file.txt>\n", argv[0]);
+            return 1;
+        }
         return export_macro(argv[2], argv[3]) ? 0 : 1;
     }
 
     if (cmd == "import")
     {
         if (argc < 4)
-        { std::fprintf(stderr, "Usage: %s import <file.txt> <file.rmac>\n", argv[0]); return 1; }
+        {
+            std::fprintf(stderr, "Usage: %s import <file.txt> <file.rmac>\n", argv[0]);
+            return 1;
+        }
         return import_macro(argv[2], argv[3]) ? 0 : 1;
     }
 
     if (cmd == "record")
     {
-        const char *file = (argc>=3)?argv[2]:kDefaultMacroFile;
-        parse_abs_args(argc,argv,3);
+        const char *file = (argc >= 3) ? argv[2] : kDefaultMacroFile;
+        parse_abs_args(argc, argv, 3);
         return record_to_file(file) ? 0 : 1;
     }
 
     if (cmd == "play")
     {
-        const char *file = (argc>=3)?argv[2]:kDefaultMacroFile;
-        if (argc>=4) gPlaySpeed = std::atof(argv[3]);
-        parse_abs_args(argc,argv,4);
+        const char *file = (argc >= 3) ? argv[2] : kDefaultMacroFile;
+        if (argc >= 4)
+            gPlaySpeed = std::atof(argv[3]);
+        parse_abs_args(argc, argv, 4);
         return play_file(file) ? 0 : 1;
     }
 
     if (cmd == "recordhunt" || cmd == "playhunt")
     {
-        const char *file = (argc>=3)?argv[2]:kDefaultMacroFile;
-        const char *ep   = (argc>=4)?argv[3]:kDefaultEnemyPath;
-        const char *bp   = (argc>=5)?argv[4]:kDefaultBattlePath;
-        double et = (argc>=6)?std::atof(argv[5]):0.75;
-        double bt = (argc>=7)?std::atof(argv[6]):0.88;
-        int sm    = (argc>=8)?std::atoi(argv[7]):200;
-        int cm    = (argc>=9)?std::atoi(argv[8]):900;
-        gEnemyTemplatesPath=ep; gBattleStartPath=bp;
-        gEnemyTh=et; gBattleTh=bt; gScanMs=sm; gCooldownMs=cm;
-        if (argc>=10) gPlaySpeed = std::atof(argv[9]);
-        parse_abs_args(argc,argv,10);
-        if (cmd=="recordhunt") return record_hunt(file,ep,bp,et,bt,sm,cm)?0:1;
-        return play_hunt(file,ep,bp,et,bt,sm,cm)?0:1;
+        const char *file = (argc >= 3) ? argv[2] : kDefaultMacroFile;
+        const char *ep = (argc >= 4) ? argv[3] : kDefaultEnemyPath;
+        const char *bp = (argc >= 5) ? argv[4] : kDefaultBattlePath;
+        double et = (argc >= 6) ? std::atof(argv[5]) : 0.75;
+        double bt = (argc >= 7) ? std::atof(argv[6]) : 0.88;
+        int sm = (argc >= 8) ? std::atoi(argv[7]) : 200;
+        int cm = (argc >= 9) ? std::atoi(argv[8]) : 900;
+        gEnemyTemplatesPath = ep;
+        gBattleStartPath = bp;
+        gEnemyTh = et;
+        gBattleTh = bt;
+        gScanMs = sm;
+        gCooldownMs = cm;
+        if (argc >= 10)
+            gPlaySpeed = std::atof(argv[9]);
+        parse_abs_args(argc, argv, 10);
+        if (cmd == "recordhunt")
+            return record_hunt(file, ep, bp, et, bt, sm, cm) ? 0 : 1;
+        return play_hunt(file, ep, bp, et, bt, sm, cm) ? 0 : 1;
     }
 
     if (cmd == "questwalk")
     {
-        const char *qp = (argc>=3)?argv[2]:kDefaultQuestPath;
-        double th  = (argc>=4)?std::atof(argv[3]):0.85;
-        int dz     = (argc>=5)?std::atoi(argv[4]):40;
-        int tick   = (argc>=6)?std::atoi(argv[5]):50;
-        parse_ignore_rect(argc,argv,6);
+        const char *qp = (argc >= 3) ? argv[2] : kDefaultQuestPath;
+        double th = (argc >= 4) ? std::atof(argv[3]) : 0.85;
+        int dz = (argc >= 5) ? std::atoi(argv[4]) : 40;
+        int tick = (argc >= 6) ? std::atoi(argv[5]) : 50;
+        parse_ignore_rect(argc, argv, 6);
         cv::Mat qt = cv::imread(qp, cv::IMREAD_COLOR);
-        if (qt.empty()) { std::fprintf(stderr,"Failed to load: %s\n",qp); return 1; }
+        if (qt.empty())
+        {
+            std::fprintf(stderr, "Failed to load: %s\n", qp);
+            return 1;
+        }
         quest_walk_standalone(qt, th, dz, tick);
         return 0;
     }
 
     if (cmd == "hunt")
     {
-        const char *ep = (argc>=3)?argv[2]:kDefaultEnemyPath;
-        const char *bp = (argc>=4)?argv[3]:kDefaultBattlePath;
-        double et = (argc>=5)?std::atof(argv[4]):0.75;
-        double bt = (argc>=6)?std::atof(argv[5]):0.88;
-        int sm    = (argc>=7)?std::atoi(argv[6]):200;
-        int cm    = (argc>=8)?std::atoi(argv[7]):900;
-        gEnemyTemplatesPath=ep; gBattleStartPath=bp;
-        gEnemyTh=et; gBattleTh=bt; gScanMs=sm; gCooldownMs=cm;
+        const char *ep = (argc >= 3) ? argv[2] : kDefaultEnemyPath;
+        const char *bp = (argc >= 4) ? argv[3] : kDefaultBattlePath;
+        double et = (argc >= 5) ? std::atof(argv[4]) : 0.75;
+        double bt = (argc >= 6) ? std::atof(argv[5]) : 0.88;
+        int sm = (argc >= 7) ? std::atoi(argv[6]) : 200;
+        int cm = (argc >= 8) ? std::atoi(argv[7]) : 900;
+        gEnemyTemplatesPath = ep;
+        gBattleStartPath = bp;
+        gEnemyTh = et;
+        gBattleTh = bt;
+        gScanMs = sm;
+        gCooldownMs = cm;
         gPlaying = true;
         bool overlay_ok = create_overlay_window();
-        if (overlay_ok) { overlay_show(true); pump_messages_nonblocking(); }
+        if (overlay_ok)
+        {
+            overlay_show(true);
+            pump_messages_nonblocking();
+        }
         timeBeginPeriod(1);
         start_auto_hunt(ep, bp, et, bt, sm, cm);
         std::puts("[HUNT] Standalone. ESC to stop.");
-        while (!(GetAsyncKeyState(VK_ESCAPE)&0x8000))
-        { maybe_restart_hunt_on_shift(); pump_messages_nonblocking(); Sleep(50); }
-        gPlaying=false; stop_all_threads(); timeEndPeriod(1);
-        if (overlay_ok) { overlay_show(false); destroy_overlay_window(); pump_messages_nonblocking(); }
+        while (!(GetAsyncKeyState(VK_ESCAPE) & 0x8000))
+        {
+            maybe_restart_hunt_on_shift();
+            pump_messages_nonblocking();
+            Sleep(50);
+        }
+        gPlaying = false;
+        stop_all_threads();
+        timeEndPeriod(1);
+        if (overlay_ok)
+        {
+            overlay_show(false);
+            destroy_overlay_window();
+            pump_messages_nonblocking();
+        }
         return 0;
     }
 
     if (cmd == "playfull")
     {
-        double mth  = (argc>=3)?std::atof(argv[2]):gMarkerTh;
-        int dz      = (argc>=4)?std::atoi(argv[3]):gDeadzonePx;
-        int tick    = (argc>=5)?std::atoi(argv[4]):gQuestTickMs;
-        double eth  = (argc>=6)?std::atof(argv[5]):gEnemyTh;
-        double bth  = (argc>=7)?std::atof(argv[6]):gBattleTh;
-        int sm      = (argc>=8)?std::atoi(argv[7]):gScanMs;
-        int cm      = (argc>=9)?std::atoi(argv[8]):gCooldownMs;
-        int ignL    = (argc>=10)?std::atoi(argv[9]):gQuestLogIgnore.left;
-        int ignT    = (argc>=11)?std::atoi(argv[10]):gQuestLogIgnore.top;
-        int ignR    = (argc>=12)?std::atoi(argv[11]):gQuestLogIgnore.right;
-        int ignB    = (argc>=13)?std::atoi(argv[12]):gQuestLogIgnore.bottom;
+        double mth = (argc >= 3) ? std::atof(argv[2]) : gMarkerTh;
+        int dz = (argc >= 4) ? std::atoi(argv[3]) : gDeadzonePx;
+        int tick = (argc >= 5) ? std::atoi(argv[4]) : gQuestTickMs;
+        double eth = (argc >= 6) ? std::atof(argv[5]) : gEnemyTh;
+        double bth = (argc >= 7) ? std::atof(argv[6]) : gBattleTh;
+        int sm = (argc >= 8) ? std::atoi(argv[7]) : gScanMs;
+        int cm = (argc >= 9) ? std::atoi(argv[8]) : gCooldownMs;
+        int ignL = (argc >= 10) ? std::atoi(argv[9]) : gQuestLogIgnore.left;
+        int ignT = (argc >= 11) ? std::atoi(argv[10]) : gQuestLogIgnore.top;
+        int ignR = (argc >= 12) ? std::atoi(argv[11]) : gQuestLogIgnore.right;
+        int ignB = (argc >= 13) ? std::atoi(argv[12]) : gQuestLogIgnore.bottom;
         return play_full(nullptr, mth, dz, tick, eth, bth, sm, cm, ignL, ignT, ignR, ignB) ? 0 : 1;
     }
 
     if (cmd == "full")
     {
-        const char *file = (argc>=3)?argv[2]:kDefaultMacroFile;
-        return run_full_integrated(file)?0:1;
+        const char *file = (argc >= 3) ? argv[2] : kDefaultMacroFile;
+        return run_full_integrated(file) ? 0 : 1;
     }
 
-    std::fprintf(stderr,"Unknown command: %s\n",cmd.c_str());
+    std::fprintf(stderr, "Unknown command: %s\n", cmd.c_str());
     return 1;
 }
